@@ -1,6 +1,6 @@
 # EULC Screener
 
-Revision: 2026-10-14 03:00:06 (Africa/Cairo). Version 2.1.0.
+Revision: 2026-10-14 (Africa/Cairo). Version 2.2.0.
 
 EULC Screener is an Electron desktop app for screening thesis libraries, searching transcripts, viewing matching pages, and exporting results. Its own local server starts and stops with the desktop app. No separate server or proxy needs to be started. The supplied localhost certificate/key are bundled in `resources/certs/`.
 
@@ -16,7 +16,9 @@ The app listens only on loopback port 18761 and opens `https://localhost:18761`.
 
 ## Interface
 
-The workspace uses a search panel on the left and separate library and saved-search panels on the right. Matching theses appear below with filters and batch transcript actions. Smaller windows stack the panels. Results and transcript text wrap within their panels; Arabic text uses natural bidirectional layout.
+Two tabs at the top switch the whole workspace between **Search theses** and **Build a library**. Each mode keeps its own parameters and its own result list; switching back restores them. Build mode uses a teal accent so the two are easy to tell apart.
+
+The top row holds **Libraries** and the **Search archive** side by side. The search panel sits below them, then the results. Smaller windows stack the panels. Results and transcript text wrap within their panels; Arabic text uses natural bidirectional layout. Short confirmations appear as notices in the lower-right corner.
 
 Use **Theme** in the header to select System, Light or Dark. System follows the operating-system theme and updates when it changes. **Compact** reduces spacing and control heights. These preferences are kept in localStorage under `EULC_UI_PREFS` and persisted by the desktop state mechanism. Theme controls do not prevent a new profile from restoring its packaged libraries.
 
@@ -26,7 +28,31 @@ Request errors appear in a dismissible banner with **Copy details**, which copie
 
 ## Use
 
-Choose a library or enter a BibID, set pages and years, and press Search. The initial package includes the uploaded library configuration, keywords, and previous search settings. Build Library discovers titles by query and year; the ordinary screener searches the selected library's BibIDs. Title/content filters narrow the displayed matches.
+### Query rows (both modes)
+
+Add rows with **Add term** / **Add query** and remove them with ×. Each row has a **Required** tick:
+
+- A single row is always required and cannot be unticked.
+- Adding a second row unticks the first; every new row starts unticked.
+- A match needs every required row. With no required row, any one row is enough. Optional rows never exclude anything once a required row exists.
+
+**Publication years** has a **Range / Exact** switch. Exact uses one year as both ends. Switching to Exact keeps the start year, or the end year if the start is empty; switching back fills both ends with that year.
+
+### Search theses
+
+Searches the pages of the library selected in **Libraries**, or of one thesis when a BibID is entered under **Single thesis**. Set the page range and years, then press **Search theses**. Title/content filters narrow the displayed matches. **Collect all transcripts** and **Export all transcripts** work on the visible results.
+
+### Build a library
+
+Queries the EULC catalogue. Each row picks a catalogue field (Title, Anywhere, Author, Supervisor, Subject headings, Table of contents, Publisher, Related work, Dewey number). The app sends one catalogue request per row and combines the BibID sets with the Required rules above, so any number of rows works. Further options map to the EULC advanced search form: **Location** (university), **Word matching** (exact words, inflections, synonyms), **Attachments contain** (full text), **BibID range**, **Sort by**, **Exact matches only**, plus a **Thesis size** page range checked against each catalogue record. Click a result to read its abstract.
+
+Every result has a checkbox. **New library** (or **New library from checked**) creates a library from the checked rows only; **Add to selected** appends them to the selected library. **Always show checked rows** keeps checked rows visible through the filters and carries them into the next catalogue search.
+
+### Libraries and the Search archive
+
+In Search mode, **New library** and **Add to selected** use the visible results. **Import** merges an exported library list; a library with the same name is replaced. Delete asks for confirmation.
+
+The Search archive stores result sets. **Archive results** works in Search mode only. **Open** works from either mode and switches to Search mode.
 
 Open a result to search and collect its page transcripts. JSON, image archives, result archives, and transcript PDF export remain available. Transcript PDFs use Chromium's layout engine for Arabic shaping and bidirectional text. Open in Browser opens a generated PDF preview; the preview is available for 30 minutes while the app remains open. Downloads go into the app's `downloads` folder; Save As can choose another PDF destination.
 

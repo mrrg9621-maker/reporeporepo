@@ -10,6 +10,10 @@ export const DEFAULT_START_YEAR = 2015;
 export const DEFAULT_END_YEAR = new Date().getFullYear();
 
 export const PREV_SEARCH_PARAMS = 'PREV_PARAMS';
+export const PREV_BUILDER_PARAMS = 'PREV_BUILDER_PARAMS';
+export const MODE_STOR_KEY = 'EULC_MODE';
+export const MIN_YEAR = 1900;
+export const MAX_QUERIES = 8;
 
 export const LIB_STOR_KEY = 'Libraries';
 

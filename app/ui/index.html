@@ -15,31 +15,141 @@
     <div class="brand"><span class="brand-mark" aria-hidden="true">E</span><div><strong>EULC Screener</strong><span>Research workspace</span></div></div>
     <div class="header-tools"><span id="appStatus" class="status-pill" role="status">Starting…</span><label class="theme-control" for="themeSelect">Theme<select id="themeSelect" aria-label="Colour theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button id="densityButton" class="quiet-button" aria-pressed="false" title="Use a denser layout">Compact</button></div>
   </header>
-  <main class="workspace">
-    <div class="page-heading"><div><span class="eyebrow">THESIS RESEARCH</span><h1>Thesis screening</h1><p>Find matching pages. Collect the text. Keep your research organised.</p></div><a class="heading-link" href="https://www.eulc.edu.eg/" target="_blank" rel="noopener">Open EULC <span aria-hidden="true">↗</span></a></div>
-    <div id="appError" class="error-banner" role="alert" hidden><div><strong>Something needs attention</strong><div id="appErrorText"></div></div><div class="error-actions"><button id="copyErrorBtn">Copy details</button><button id="dismissErrorBtn" class="icon-button" aria-label="Dismiss error">×</button></div></div>
-    <div class="screener">
-      <div class="setup-grid">
-        <section class="panel search-panel ui-group ui-outer" aria-labelledby="searchHeading">
-          <div class="panel-heading"><div><span class="step-tag">01</span><h2 id="searchHeading">Search parameters</h2></div><button class="quiet-button" id="loadPrevParamsBtn" title="Restore the last search parameters">Restore previous</button></div>
-          <div class="query-field"><span class="field-label" id="queryLabel">Search query</span><div id="querySpBoxes" class="query-boxes"><input aria-labelledby="queryLabel" type="text" placeholder="Search words or phrases…" autocomplete="off" aria-label="Search query"></div><p class="field-note">Search a selected library, or enter a BibID for one thesis.</p></div>
-          <div class="scope-grid">
-            <div class="field"><label class="field-label" for="pagesStartInput">Pages</label><div class="range-field"><input type="number" id="pagesStartInput" min="1" aria-label="First page"><span aria-hidden="true">to</span><input type="number" id="pagesEndInput" min="1" aria-label="Last page"></div></div>
-            <div class="field"><label class="field-label" for="yearsStartSele">Publication years</label><div class="range-field"><select data-type="number" id="yearsStartSele" aria-label="First publication year"></select><span aria-hidden="true">to</span><select data-type="number" id="yearsEndSele" aria-label="Last publication year"></select></div></div>
-            <div class="field bib-field"><label class="field-label" for="bibIDInput">Single thesis <span class="optional">optional</span></label><input type="text" inputmode="numeric" id="bibIDInput" placeholder="BibID, e.g. 13116778"><p class="field-note">A BibID takes priority over the selected library.</p></div>
-          </div>
-          <div class="search-options"><label class="check-card"><input type="checkbox" id="multipleQueriesChBx"><span><strong>Multiple queries</strong><small>Add several search terms.</small></span></label><label class="check-card"><input type="checkbox" id="buildLibChBx"><span><strong>Build a library</strong><small>Discover theses by query and year.</small></span></label></div>
-          <div class="search-action"><button class="button-base main-button" id="searchButton"><span aria-hidden="true">⌕</span> Search theses</button><div class="progress-container" aria-label="Search progress"><div class="progress-bar" id="progressBar"></div><span class="progress-status" id="progressStatus"></span></div></div>
-        </section>
-        <aside class="library-sidebar">
-          <section class="panel ui-group ui-outer" aria-labelledby="libraryHeading"><div class="panel-heading"><div><span class="step-tag">02</span><h2 id="libraryHeading">Thesis libraries</h2></div></div><label class="field-label" for="librarySele">Selected library</label><select data-type="text" id="librarySele"></select><div class="action-grid"><button class="button-base aux-button" id="libAddBtn">New library</button><button class="button-base aux-button" id="libRenameBtn">Rename</button><button class="button-base aux-button danger-button" id="libDelBtn">Delete</button><button class="button-base aux-button" id="libImportBtn">Import</button><button class="button-base aux-button" id="libDownloadBtn">Export</button><button class="button-base aux-button" id="libSaveBtn" title="Save visible results as a library">Save results</button></div><input type="file" id="importLibInput" accept=".json" hidden></section>
-          <section class="panel ui-group ui-outer" aria-labelledby="savedHeading"><div class="panel-heading"><div><span class="section-symbol" aria-hidden="true">◷</span><h2 id="savedHeading">Saved searches</h2></div></div><label class="field-label" for="savedResultsSele">Saved result set</label><select id="savedResultsSele" aria-label="Saved result set"></select><div class="action-grid"><button class="button-base aux-button" id="dbSaveButton">Save current</button><button class="button-base aux-button" id="dbLoadButton">Load</button><button class="button-base aux-button" id="dbRenameButton">Rename</button><button class="button-base aux-button" id="dbDownloadButton">Export</button><button class="button-base aux-button" id="dbDownloadALLButton">Export all</button><button class="button-base aux-button danger-button" id="dbDeleteButton">Delete</button></div><button class="quiet-button wide-button" id="importButton">Import saved results <span aria-hidden="true">↗</span></button><input type="file" id="importFileInput" accept=".json,.zip" hidden></section>
-        </aside>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7.5"/><path d="m21 21-4.6-4.6"/></symbol>
+      <symbol id="i-builder" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M12 6.5v7M8.5 10h7"/></symbol>
+      <symbol id="i-library" viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z"/></symbol>
+      <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3.5 2"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+      <symbol id="i-list-plus" viewBox="0 0 24 24"><path d="M11 12H3M16 6H3M16 18H3M18 9v6M21 12h-6"/></symbol>
+      <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/></symbol>
+      <symbol id="i-files" viewBox="0 0 24 24"><path d="M15 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/><path d="M15 2v5h5M4 6v14a2 2 0 0 0 2 2h10"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
+      <symbol id="i-open" viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></symbol>
+      <symbol id="i-restore" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-check-all" viewBox="0 0 24 24"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></symbol>
+      <symbol id="i-square" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></symbol>
+    </defs>
+  </svg>
+  <main class="workspace" data-mode="search">
+    <div class="mode-bar">
+      <div class="mode-switch" role="tablist" aria-label="Workspace mode">
+        <button type="button" role="tab" class="mode-tab" id="modeSearchTab" data-mode="search" aria-selected="true"><svg class="ico"><use href="#i-search"/></svg><span><strong>Search theses</strong><small>Find matching pages inside theses</small></span></button>
+        <button type="button" role="tab" class="mode-tab" id="modeBuilderTab" data-mode="builder" aria-selected="false"><svg class="ico"><use href="#i-builder"/></svg><span><strong>Build a library</strong><small>Discover theses in the EULC catalogue</small></span></button>
       </div>
-      <section id="emptyState" class="empty-state"><div class="empty-symbol" aria-hidden="true"><span></span><span></span><span></span></div><h2 id="emptyHeading">Your next discovery starts here</h2><p id="emptyDescription">Choose a library or enter a BibID, then search for the pages you need.</p><div class="empty-hints"><span>Screen thesis pages</span><span>Collect transcripts</span><span>Export your findings</span></div></section>
-      <section class="panel results-panel ui-group ui-outer hidden" id="screenerResCntr" aria-labelledby="resultsHeading"><div class="panel-heading"><div><span class="step-tag">03</span><h2 id="resultsHeading">Matching theses</h2></div><div class="result-totals"><span class="result-count" id="resultItmsNumLog"></span><span class="visible-result-count" id="visResultItmsNumLog"></span></div></div><div class="filter-grid"><div><span class="field-label" id="titleFilterLabel">Filter titles</span><div id="titleFiltSpBoxes" class="filter-boxes"><input aria-labelledby="titleFilterLabel" type="text" placeholder="Include words, or -word to exclude" aria-label="Title filter"></div></div><div><span class="field-label" id="contentFilterLabel">Filter content</span><div id="contentFiltSpBoxes" class="filter-boxes"><input aria-labelledby="contentFilterLabel" type="text" placeholder="Words in the transcript" aria-label="Content filter"></div></div></div><div id="screenerBatchBar" class="screener-batch-bar"><button id="scrapAllBtn" class="screener-batch-btn res-scrap-all-btn"></button><button id="downloadAllBtn" class="screener-batch-btn res-download-all-btn"></button><span class="batch-note">Collect and export the displayed results.</span></div><div class="flex-column" id="screenerResGrp"></div></section>
+      <a class="heading-link" href="https://www.eulc.edu.eg/" target="_blank" rel="noopener">Open EULC <svg class="ico ico-sm"><use href="#i-external"/></svg></a>
     </div>
-    <footer class="workspace-footer"><span>EULC thesis workspace</span><span>Your libraries and saved searches stay on this computer.</span></footer>
+    <div id="appError" class="error-banner" role="alert" hidden><div><strong>Something needs attention</strong><div id="appErrorText"></div></div><div class="error-actions"><button id="copyErrorBtn" class="btn btn-soft">Copy details</button><button id="dismissErrorBtn" class="icon-button" aria-label="Dismiss error">×</button></div></div>
+    <div class="screener">
+      <div class="collections-row">
+        <section class="panel collection-panel" aria-labelledby="libraryHeading">
+          <div class="panel-heading"><div class="panel-title"><span class="panel-icon"><svg class="ico"><use href="#i-library"/></svg></span><h2 id="libraryHeading">Libraries</h2></div><span class="meta-chip" id="libMeta"></span></div>
+          <select data-type="text" id="librarySele" aria-label="Selected library"></select>
+          <div class="btn-row">
+            <button class="btn btn-primary-soft" id="libAddBtn"><svg class="ico"><use href="#i-plus"/></svg>New library</button>
+            <button class="btn btn-soft" id="libAppendBtn"><svg class="ico"><use href="#i-list-plus"/></svg>Add to selected</button>
+          </div>
+          <p class="panel-hint" id="libHint"></p>
+          <div class="tool-row">
+            <button class="tool-btn" id="libRenameBtn"><svg class="ico"><use href="#i-pencil"/></svg>Rename</button>
+            <button class="tool-btn" id="libImportBtn"><svg class="ico"><use href="#i-upload"/></svg>Import</button>
+            <button class="tool-btn" id="libDownloadBtn"><svg class="ico"><use href="#i-download"/></svg>Export all</button>
+            <button class="tool-btn tool-danger" id="libDelBtn"><svg class="ico"><use href="#i-trash"/></svg>Delete</button>
+          </div>
+          <input type="file" id="importLibInput" accept=".json" hidden>
+        </section>
+        <section class="panel collection-panel" aria-labelledby="savedHeading">
+          <div class="panel-heading"><div class="panel-title"><span class="panel-icon"><svg class="ico"><use href="#i-history"/></svg></span><h2 id="savedHeading">Search archive</h2></div><span class="meta-chip" id="archiveMeta"></span></div>
+          <select id="savedResultsSele" aria-label="Archived search"></select>
+          <div class="btn-row">
+            <button class="btn btn-primary-soft" id="dbSaveButton"><svg class="ico"><use href="#i-save"/></svg>Archive results</button>
+            <button class="btn btn-soft" id="dbLoadButton"><svg class="ico"><use href="#i-open"/></svg>Open</button>
+          </div>
+          <p class="panel-hint" id="archiveHint"></p>
+          <div class="tool-row">
+            <button class="tool-btn" id="dbRenameButton"><svg class="ico"><use href="#i-pencil"/></svg>Rename</button>
+            <button class="tool-btn" id="importButton"><svg class="ico"><use href="#i-upload"/></svg>Import</button>
+            <button class="tool-btn" id="dbDownloadButton"><svg class="ico"><use href="#i-download"/></svg>Export</button>
+            <button class="tool-btn" id="dbDownloadALLButton"><svg class="ico"><use href="#i-files"/></svg>Export all</button>
+            <button class="tool-btn tool-danger" id="dbDeleteButton"><svg class="ico"><use href="#i-trash"/></svg>Delete</button>
+          </div>
+          <input type="file" id="importFileInput" accept=".json,.zip" hidden>
+        </section>
+      </div>
+
+      <section class="panel search-panel" aria-labelledby="searchHeading">
+        <div class="panel-heading">
+          <div class="panel-title"><span class="panel-icon accent"><svg class="ico"><use href="#i-search" class="mode-icon-search"/><use href="#i-builder" class="mode-icon-builder"/></svg></span><div><h2 id="searchHeading">Search parameters</h2><p class="panel-sub" id="searchSub"></p></div></div>
+          <button class="btn btn-ghost" id="loadPrevParamsBtn" title="Restore the last parameters used in this mode"><svg class="ico"><use href="#i-restore"/></svg>Restore previous</button>
+        </div>
+
+        <div class="mode-section" data-mode-section="search">
+          <div class="query-block">
+            <div class="query-block-head"><span class="field-label" id="queryLabel">Search terms</span><button type="button" class="btn btn-ghost btn-sm" id="queryAddBtn"><svg class="ico"><use href="#i-plus"/></svg>Add term</button></div>
+            <div id="querySpBoxes" class="query-list" aria-labelledby="queryLabel"></div>
+            <p class="field-note">Tick <b>Required</b> for terms a page must contain. Unticked terms are optional: with no required term, a page needs any one of them.</p>
+          </div>
+          <div class="scope-grid">
+            <div class="field"><span class="field-label">Source</span><div class="source-box" id="searchSource"></div></div>
+            <div class="field"><label class="field-label" for="bibIDInput">Single thesis <span class="optional">optional</span></label><input type="text" inputmode="numeric" id="bibIDInput" placeholder="BibID, e.g. 13116778"></div>
+            <div class="field"><label class="field-label" for="pagesStartInput">Pages</label><div class="range-field"><input type="number" id="pagesStartInput" min="1" aria-label="First page"><span aria-hidden="true">to</span><input type="number" id="pagesEndInput" min="1" aria-label="Last page"></div></div>
+            <div class="field year-field" id="searchYears"></div>
+          </div>
+        </div>
+
+        <div class="mode-section" data-mode-section="builder">
+          <div class="query-block">
+            <div class="query-block-head"><span class="field-label" id="builderQueryLabel">Catalogue queries</span><button type="button" class="btn btn-ghost btn-sm" id="builderQueryAddBtn"><svg class="ico"><use href="#i-plus"/></svg>Add query</button></div>
+            <div id="builderQueries" class="query-list" aria-labelledby="builderQueryLabel"></div>
+            <p class="field-note">Each query searches one catalogue field. Required queries must all match; with none required, any query may match. Use <b>*</b> for a partial word, <b>&amp;</b> for both words, <b>~</b> for nearby words.</p>
+          </div>
+          <div class="scope-grid builder-grid">
+            <div class="field"><label class="field-label" for="builderScopeSele">Location</label><select id="builderScopeSele"></select></div>
+            <div class="field"><label class="field-label" for="builderWordFormsSele">Word matching</label><select id="builderWordFormsSele"></select></div>
+            <div class="field"><label class="field-label" for="builderFullTextInput">Attachments contain <span class="optional">optional</span></label><input type="text" id="builderFullTextInput" placeholder="Text inside the thesis files"></div>
+            <div class="field"><label class="field-label" for="builderBibRangeInput">BibID range <span class="optional">optional</span></label><input type="text" id="builderBibRangeInput" placeholder="e.g. 100 or 350-480"></div>
+            <div class="field year-field" id="builderYears"></div>
+            <div class="field"><label class="field-label" for="builderPagesMinInput">Thesis size (pages)</label><div class="range-field"><input type="number" id="builderPagesMinInput" min="0" placeholder="Min" aria-label="Minimum pages"><span aria-hidden="true">to</span><input type="number" id="builderPagesMaxInput" min="0" placeholder="Max" aria-label="Maximum pages"></div></div>
+            <div class="field"><label class="field-label" for="builderOrderSele">Sort by</label><select id="builderOrderSele"></select></div>
+            <div class="field"><span class="field-label">Matching</span><label class="switch-row"><input type="checkbox" id="builderExactChBx"><span>Exact matches only</span></label></div>
+          </div>
+        </div>
+
+        <div class="search-action">
+          <button class="btn btn-primary btn-lg" id="searchButton"><svg class="ico"><use href="#i-search"/></svg><span id="searchButtonLabel">Search theses</span></button>
+          <div class="progress-container" aria-label="Search progress"><div class="progress-bar" id="progressBar"></div><span class="progress-status" id="progressStatus"></span></div>
+        </div>
+      </section>
+
+      <section id="emptyState" class="empty-state"><h2 id="emptyHeading"></h2><p id="emptyDescription"></p></section>
+
+      <section class="panel results-panel hidden" id="screenerResCntr" aria-labelledby="resultsHeading">
+        <div class="panel-heading"><div class="panel-title"><h2 id="resultsHeading">Matching theses</h2></div><div class="result-totals"><span class="result-count" id="resultItmsNumLog"></span><span class="visible-result-count" id="visResultItmsNumLog"></span><span class="checked-count" id="checkedNumLog"></span></div></div>
+        <div class="filter-grid"><div><span class="field-label" id="titleFilterLabel">Filter titles</span><div id="titleFiltSpBoxes" class="filter-boxes"><input aria-labelledby="titleFilterLabel" type="text" placeholder="Include words, or -word to exclude" aria-label="Title filter"></div></div><div><span class="field-label" id="contentFilterLabel">Filter content</span><div id="contentFiltSpBoxes" class="filter-boxes"><input aria-labelledby="contentFilterLabel" type="text" placeholder="Words in the pages or abstract" aria-label="Content filter"></div></div></div>
+        <div id="screenerBatchBar" class="action-bar" data-mode-section="search">
+          <button id="scrapAllBtn" class="btn btn-soft"><svg class="ico"><use href="#i-layers"/></svg>Collect all transcripts</button>
+          <button id="downloadAllBtn" class="btn btn-soft"><svg class="ico"><use href="#i-download"/></svg>Export all transcripts</button>
+          <span class="bar-note">Works on the visible results.</span>
+        </div>
+        <div id="builderSelectBar" class="action-bar" data-mode-section="builder">
+          <button id="checkVisibleBtn" class="btn btn-soft"><svg class="ico"><use href="#i-check-all"/></svg>Check visible</button>
+          <button id="uncheckAllBtn" class="btn btn-soft"><svg class="ico"><use href="#i-square"/></svg>Clear checks</button>
+          <label class="switch-row"><input type="checkbox" id="keepCheckedChBx"><span>Always show checked rows <small>through filters and new searches</small></span></label>
+          <button id="barNewLibBtn" class="btn btn-primary-soft bar-end"><svg class="ico"><use href="#i-plus"/></svg>New library from checked</button>
+        </div>
+        <div class="flex-column" id="screenerResGrp"></div>
+      </section>
+    </div>
   </main>
   <div class="overlay"></div>
   <section class="scraper hidden" id="scraperContainer" role="dialog" aria-modal="true" aria-labelledby="scraperTitle">

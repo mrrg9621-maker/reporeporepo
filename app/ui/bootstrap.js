@@ -47,23 +47,30 @@ document.getElementById('copyErrorBtn').addEventListener('click', async e => {
 const searchButton = document.getElementById('searchButton');
 const results = document.getElementById('screenerResCntr');
 const empty = document.getElementById('emptyState');
-let searched = false;
-searchButton.addEventListener('click', () => { lastError = null; errorBox.hidden = true; searched = true; }, true);
+const workspace = document.querySelector('.workspace');
+const searchedModes = new Set();
+const emptyText = {
+  search: {idle:['No results yet', 'Pick a library in Libraries, or enter a BibID, then search the thesis pages.'],
+           none:['No matching pages found', 'Try different terms, mark fewer terms as required, widen the years, or pick another library.']},
+  builder:{idle:['No catalogue results yet', 'Add one or more queries, then press Find theses. Check the theses you want and create a library.'],
+           none:['No theses found', 'Try other queries or fields, untick Required on some queries, or widen the years.']}
+};
+searchButton.addEventListener('click', () => { lastError = null; errorBox.hidden = true; searchedModes.add(workspace.dataset.mode); }, true);
 function updateSearchState() {
   const busy = searchButton.disabled;
+  const mode = workspace.dataset.mode === 'builder' ? 'builder' : 'search';
   if (busy) setStatus('Searching…', 'busy');
   else if (!lastError) setStatus('Ready', 'ready');
   empty.hidden = !results.classList.contains('hidden');
-  if (busy) {
-    document.getElementById('emptyHeading').textContent = 'Looking for matching pages…';
-    document.getElementById('emptyDescription').textContent = 'Results appear as the search completes. Follow the progress above.';
-  } else if (searched && empty.hidden === false) {
-    document.getElementById('emptyHeading').textContent = lastError ? 'The search needs attention' : 'No matching pages found';
-    document.getElementById('emptyDescription').textContent = lastError ? 'Read the error above, or copy its details for debugging.' : 'Try different words, widen the year range, or select another library.';
-  }
+  let [heading, description] = emptyText[mode][searchedModes.has(mode) ? 'none' : 'idle'];
+  if (busy) [heading, description] = ['Searching…', 'Results appear as they arrive. Follow the progress bar above.'];
+  else if (lastError && searchedModes.has(mode)) [heading, description] = ['The search needs attention', 'Read the error above, or copy its details for debugging.'];
+  document.getElementById('emptyHeading').textContent = heading;
+  document.getElementById('emptyDescription').textContent = description;
 }
 new MutationObserver(updateSearchState).observe(searchButton, {attributes:true, attributeFilter:['disabled']});
 new MutationObserver(updateSearchState).observe(results, {attributes:true, attributeFilter:['class']});
+new MutationObserver(updateSearchState).observe(workspace, {attributes:true, attributeFilter:['data-mode']});
 const scraper = document.getElementById('scraperContainer');
 let lastFocus, wasOpen = false;
 new MutationObserver(() => {
@@ -84,8 +91,7 @@ document.addEventListener('keydown', e => {
   }
 });
 function labelResultControls() {
-  for (const el of document.querySelectorAll('.res-lock-btn')) { const label = el.classList.contains('locked') ? 'Unlock result' : 'Lock result'; el.setAttribute('aria-label',label); el.title=label; }
-  for (const [selector,label] of [['.res-remove-btn','Remove result'],['.res-down-imgs-btn','Export thesis images'],['.res-get-desig-btn','Copy folder name'],['.res-search-url','Search transcript'],['.res-browse-url','Browse thesis'],['.scraper-scrap-btn','Collect page text'],['.scraper-getpg-btn','Map page number']]) {
+  for (const [selector,label] of [['.scraper-scrap-btn','Collect page text'],['.scraper-getpg-btn','Map page number']]) {
     for (const el of document.querySelectorAll(selector)) { el.setAttribute('aria-label',label); el.title=label; }
   }
 }

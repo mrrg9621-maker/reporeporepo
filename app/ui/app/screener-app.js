@@ -3,7 +3,6 @@
  ***********************************************/
 
 import {
-    DEFAULT_START_YEAR_RANGE,
     DEFAULT_START_YEAR,
     DEFAULT_END_YEAR,
     DEFAULT_START_PAGE,
@@ -14,11 +13,21 @@ import {
     IMPORT_FILE_TYPES,
     QUERY_PLACEHOLDER,
     FOLDER_DESIG_WORDS_LEN,
-    PREV_SEARCH_PARAMS
+    PREV_SEARCH_PARAMS,
+    PREV_BUILDER_PARAMS,
+    MODE_STOR_KEY,
+    MIN_YEAR,
+    MAX_QUERIES
 }
 from '../configs/configs.js';
 import {
-    arrayFromNUMRange,
+    EULC_FIELDS, EULC_DEFAULT_FIELD,
+    EULC_WORD_FORMS,
+    EULC_ORDERS, EULC_DEFAULT_ORDER,
+    EULC_SCOPES, EULC_DEFAULT_SCOPE
+}
+from '../configs/eulc-options.js';
+import {
     getTimeStamp,
     downloadJSON,
     downloadJSONZIP,
@@ -31,7 +40,8 @@ import {
     URLER,
     removeDupesFromArr,
     downloadFilesZIP,
-    sanitizeFileName
+    sanitizeFileName,
+    notify
 }
 from '../utils/utils.js';
 
@@ -53,7 +63,7 @@ from './scraper-app.js';
  ***********************************************/
 const urler = new URLER(URL_PROTOCOL, URL_SUBDOMAINS, URL_BASES);
 let searchParams = {};
-const summaryMap = new Map();
+const summaryMap = new WeakMap();
 let scraperCallback = function (){};
 
 /* Batch (Scrap All / Download All) knobs */
@@ -61,30 +71,57 @@ const PDF_NAME_MAX_LEN   = 120;       // whole "title [Year][bibID]" stem
 const PDF_NAME_TITLE_WORDS = Infinity;  // set to FOLDER_DESIG_WORDS_LEN to mirror the copy-desig button
 const SKIP_CACHED_ON_SCRAP_ALL = true;  // a bib already scraped cleanly is not scraped again
 let batchBusy = false;
+
+/* Workspace mode: 'search' screens the pages of known theses,
+   'builder' discovers theses in the EULC catalogue. Each mode keeps its
+   own parameters and its own result list. */
+let mode = localStorage.getItem(MODE_STOR_KEY) === 'builder' ? 'builder' : 'search';
+const stashedResults = { search: null, builder: null };
+
+const MODE_TEXT = {
+    search: {
+        heading: 'Search parameters',
+        sub: 'Search the pages of a library, or of one thesis.',
+        button: 'Search theses',
+        results: 'Matching theses'
+    },
+    builder: {
+        heading: 'Library builder',
+        sub: 'Query the EULC catalogue, then check the theses to keep.',
+        button: 'Find theses',
+        results: 'Catalogue results'
+    }
+};
 /***********************************************
  *               SELECTORS                     *
  ***********************************************/
+const workspace = document.querySelector('.workspace');
+const modeTabs = document.querySelectorAll('.mode-tab');
 const pagesStartInput = document.getElementById('pagesStartInput');
 const pagesEndInput = document.getElementById('pagesEndInput');
-const yearsStartSele = document.getElementById('yearsStartSele');
-const yearsEndSele = document.getElementById('yearsEndSele');
 const bibIDInput = document.getElementById('bibIDInput');
+const searchSource = document.getElementById('searchSource');
 const librarySele = document.getElementById('librarySele');
+const libMeta = document.getElementById('libMeta');
+const libHint = document.getElementById('libHint');
 const libRenameBtn = document.getElementById('libRenameBtn');
 const libAddBtn = document.getElementById('libAddBtn');
+const libAppendBtn = document.getElementById('libAppendBtn');
 const libDelBtn = document.getElementById('libDelBtn');
 const libDownloadBtn = document.getElementById('libDownloadBtn');
 const libImportBtn = document.getElementById('libImportBtn');
 const importLibInput = document.getElementById('importLibInput');
-const libSaveBtn = document.getElementById('libSaveBtn');
-const buildLibChBx = document.getElementById('buildLibChBx');
-const multipleQueriesChBx = document.getElementById('multipleQueriesChBx');
 const loadPrevParamsBtn = document.getElementById('loadPrevParamsBtn');
 const titleFiltSpBoxes = document.getElementById('titleFiltSpBoxes');
-const querySpBoxes = document.getElementById('querySpBoxes');
 const contentFiltSpBoxes = document.getElementById('contentFiltSpBoxes');
 const searchButton = document.getElementById('searchButton');
+const searchButtonLabel = document.getElementById('searchButtonLabel');
+const searchHeading = document.getElementById('searchHeading');
+const searchSub = document.getElementById('searchSub');
+const resultsHeading = document.getElementById('resultsHeading');
 const savedResultsSele = document.getElementById('savedResultsSele');
+const archiveMeta = document.getElementById('archiveMeta');
+const archiveHint = document.getElementById('archiveHint');
 const dbSaveButton = document.getElementById('dbSaveButton');
 const dbLoadButton = document.getElementById('dbLoadButton');
 const dbRenameButton = document.getElementById('dbRenameButton');
@@ -95,65 +132,53 @@ const importButton = document.getElementById('importButton');
 const importFileInput = document.getElementById('importFileInput');
 const screenerResCntr = document.getElementById('screenerResCntr');
 const screenerResGrp = document.getElementById('screenerResGrp');
-const progressBar = document.getElementById('progressBar'); 
+const progressBar = document.getElementById('progressBar');
 const progressStatus = document.getElementById('progressStatus');
 const resultItmsNumLog = document.getElementById('resultItmsNumLog');
 const visResultItmsNumLog = document.getElementById('visResultItmsNumLog');
-const scraperContainer = document.getElementById('scraperContainer');
+const checkedNumLog = document.getElementById('checkedNumLog');
+const searchPanel = document.querySelector('.search-panel');
 
-/* Picked up from index.html when declared there; otherwise built and parked
-   directly above the results list. Labels come from CSS ::before, like the
-   other JS-built buttons. */
-const scrapAllBtn    = document.getElementById('scrapAllBtn')    ?? makeBatchBtn('scrapAllBtn', 'res-scrap-all-btn');
-const downloadAllBtn = document.getElementById('downloadAllBtn') ?? makeBatchBtn('downloadAllBtn', 'res-download-all-btn');
+const builderScopeSele = document.getElementById('builderScopeSele');
+const builderWordFormsSele = document.getElementById('builderWordFormsSele');
+const builderFullTextInput = document.getElementById('builderFullTextInput');
+const builderBibRangeInput = document.getElementById('builderBibRangeInput');
+const builderPagesMinInput = document.getElementById('builderPagesMinInput');
+const builderPagesMaxInput = document.getElementById('builderPagesMaxInput');
+const builderOrderSele = document.getElementById('builderOrderSele');
+const builderExactChBx = document.getElementById('builderExactChBx');
 
-function makeBatchBtn(id, btnClass)
-{
-    const btn = document.createElement('button');
-    btn.id = id;
-    btn.className = `screener-batch-btn ${btnClass}`;
+const checkVisibleBtn = document.getElementById('checkVisibleBtn');
+const uncheckAllBtn = document.getElementById('uncheckAllBtn');
+const keepCheckedChBx = document.getElementById('keepCheckedChBx');
+const barNewLibBtn = document.getElementById('barNewLibBtn');
 
-    let bar = document.getElementById('screenerBatchBar');
-    if (!bar)
-    {
-        bar = document.createElement('div');
-        bar.id = 'screenerBatchBar';
-        bar.className = 'screener-batch-bar';
+const scrapAllBtn    = document.getElementById('scrapAllBtn');
+const downloadAllBtn = document.getElementById('downloadAllBtn');
 
-        // Sits as the results group's immediate previous sibling, whatever
-        // depth that group happens to live at inside the results container.
-        if (screenerResGrp?.parentNode)
-        {
-            screenerResGrp.before(bar);
-        }
-        else
-        {
-            screenerResCntr.append(bar);
-        }
-    }
+/* Form components, built in initScreener */
+let searchQueries, builderQueries, searchYears, builderYears;
 
-    bar.append(btn);
-    return btn;
-}
 /***********************************************
  *               ENTRY POINT                   *
  ***********************************************/
 
 export function initScreener(_scraperCallback) {
 	scraperCallback = _scraperCallback;
-	
+
     pagesStartInput.value = DEFAULT_START_PAGE;
     pagesEndInput.value = DEFAULT_END_PAGE;
 
-    const presentYear = new Date().getFullYear();
-    const allYears = arrayFromNUMRange(DEFAULT_START_YEAR_RANGE, presentYear);
-    for (const year of allYears) {
-        const isDefaultStartYear = (year === DEFAULT_START_YEAR);
-        const isDefaultEndYear = (year === DEFAULT_END_YEAR);
-        createOptionForSelect(yearsStartSele, year, isDefaultStartYear);
-        createOptionForSelect(yearsEndSele, year, isDefaultEndYear);
-    }
+    searchQueries = createQueryList(document.getElementById('querySpBoxes'), document.getElementById('queryAddBtn'),
+        { placeholder: 'Word or phrase in the thesis pages…', noun: 'term' });
+    builderQueries = createQueryList(document.getElementById('builderQueries'), document.getElementById('builderQueryAddBtn'),
+        { placeholder: 'Catalogue search text…', noun: 'query', withField: true });
+    searchYears = createYearField(document.getElementById('searchYears'), 'search');
+    builderYears = createYearField(document.getElementById('builderYears'), 'builder');
 
+    fillSelect(builderScopeSele, EULC_SCOPES, EULC_DEFAULT_SCOPE);
+    fillSelect(builderWordFormsSele, EULC_WORD_FORMS, '');
+    fillSelect(builderOrderSele, EULC_ORDERS, EULC_DEFAULT_ORDER);
 
     refreshSavedLibs();
     refreshSavedTitles({titleSlctIndx: 0});
@@ -161,339 +186,160 @@ export function initScreener(_scraperCallback) {
     setSpBox(titleFiltSpBoxes);
     setSpBox(contentFiltSpBoxes);
 
-    buildLibChBx.addEventListener('change', () => {
-        if (buildLibChBx.checked) {
-            setSpBox(querySpBoxes,3);
-        } else {
-            if (multipleQueriesChBx.checked) {
-                setSpBox(querySpBoxes); 
-            }
-            else
-            {
-                unSetSpBox(querySpBoxes);
-            }
+    // Both forms start from their last-used parameters
+    applySearchParams(readPrevParams('search'));
+    applyBuilderParams(readPrevParams('builder'));
+
+    for (const tab of modeTabs) {
+        tab.addEventListener('click', () => setMode(tab.dataset.mode));
+    }
+    applyMode();
+
+    // Enter inside the search form runs the search
+    searchPanel.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target.matches('input:not([type=checkbox])') && !searchButton.disabled) {
+            e.preventDefault();
+            searchButton.click();
         }
     });
 
-    multipleQueriesChBx.addEventListener('change', () => {
-        if (multipleQueriesChBx.checked) {
-            setSpBox(querySpBoxes);
-        } else {
-            unSetSpBox(querySpBoxes);
-        }
-    });
-
-    window.addEventListener('keydown', (e) => {
-
-       if(e.key === 'Enter' && scraperContainer.classList.contains("hidden"))
-	   {
-		  searchButton.click();
-	   }
-
-	});
-
-
+    bibIDInput.addEventListener('input', updateSourceBox);
+    librarySele.addEventListener('change', () => { updateLibMeta(); updateSourceBox(); });
 
     searchButton.addEventListener('click', async() => {
-
         try {
-       
-
             searchButton.disabled = true;
-            let queryWords = getSpBoxesValArr(querySpBoxes);
-
-            if (!queryWords.length) {
-                queryWords = [QUERY_PLACEHOLDER];
+            setModeTabsDisabled(true);
+            if (mode === 'builder') {
+                await runBuilderSearch();
+            } else {
+                await runThesisSearch();
             }
-
-            screenerResGrp.innerHTML = "";
-            resultItmsNumLog.innerText = visResultItmsNumLog.innerText = "";
-            summaryMap.clear();
-
-			
-            const bibID = isInteger(bibIDInput.value) ? bibIDInput.value : '';
-			const pagesStart = pagesStartInput.value;
-            const pagesEnd = pagesEndInput.value
-            const yearsStart = yearsStartSele.value;
-            const yearsEnd = yearsEndSele.value;
-            const libraryName = librarySele.value;
-
-            const libBuilder = buildLibChBx.checked;
-
-
-            let resultsNum = 0;
-
-
-            searchParams = {
-                    query: queryWords.join(', '),
-                    pagesStart,
-                    pagesEnd,
-                    yearsStart,
-                    yearsEnd,
-                    libraryName,
-                    bibID,
-                    libBuilder
-                };
-
-            localStorage.setItem(PREV_SEARCH_PARAMS, JSON.stringify(searchParams));
-
-
-        
-            if (!libBuilder) {
-                
-
-                
-
-                const bibIDs = (bibID && [bibID]) || getLibrariesArray()?.find(library => library.name === libraryName)?.bibIDs;
-
-                if (!Array.isArray(bibIDs) || !bibIDs.length) {
-                    throw new Error("Select a library or enter a BibID before searching.");
-                }
-
-
-                const totalItems = bibIDs.length * queryWords.length;
-
-                const progressObj = new Progress(totalItems, progressBar, progressStatus);
-
-                resultsNum = await getBibs(bibIDs, queryWords, yearsStart, yearsEnd, pagesStart, pagesEnd, progressObj, setResItemForRender);
-
-                resetSpBox(titleFiltSpBoxes, false);
-                resetSpBox(contentFiltSpBoxes, false);
-
-                
-            }
-			else
-			{
-				const minPagesLen = pagesStart || pagesEnd;
-				resultsNum = await getLib(queryWords, yearsStart, yearsEnd, minPagesLen, setResItemForRender);
-				
-			}
-
-
-
-            resultItmsNumLog.innerText = visResultItmsNumLog.innerText = resultsNum;
-
-        } 
-        catch (err) 
+        }
+        catch (err)
         {
             window.reportAppError?.(err);
         }
-        finally 
+        finally
         {
             searchButton.disabled = false;
+            setModeTabsDisabled(false);
+            updateSelectionUI();
         }
-
     });
-    
 
-    loadPrevParamsBtn.addEventListener('click', loadPrevParams);
-    loadPrevParamsBtn.click();
-
+    loadPrevParamsBtn.addEventListener('click', () => {
+        const prev = readPrevParams(mode);
+        if (!prev) return notify('No previous parameters for this mode yet.');
+        mode === 'builder' ? applyBuilderParams(prev) : applySearchParams(prev);
+        notify('Previous parameters restored.');
+    });
 
     titleFiltSpBoxes.addEventListener('input',  processFilters);
     contentFiltSpBoxes.addEventListener('input',    processFilters);
-        
-    
-    function processFilters()
-    {
-        const visibleElements = processTitleFilts();
-        const visibleElementsII = processContentFilts(visibleElements);
+    keepCheckedChBx.addEventListener('change', processFilters);
 
-        visResultItmsNumLog.innerText = visibleElementsII.length;
+    /* ---------- Builder selection ---------- */
 
-    }
-        
-    function processTitleFilts(resultElements = document.querySelectorAll('.result-item'))
-    {
+    checkVisibleBtn.addEventListener('click', () => {
+        for (const item of getVisibleItems()) setItemChecked(item, true);
+        updateSelectionUI();
+    });
+    uncheckAllBtn.addEventListener('click', () => {
+        for (const item of screenerResGrp.querySelectorAll('.result-item.checked')) setItemChecked(item, false);
+        processFilters();
+    });
+    barNewLibBtn.addEventListener('click', createLibraryFromSelection);
 
-        const titleFilters = getSpBoxesValArr(titleFiltSpBoxes);
-        const visibleElements = [];
+    /* ---------- Libraries ---------- */
 
-        for (const resultElement of resultElements) {
-             const resultTitleEle = resultElement.querySelector(".result-title");
-             const resultTitle = resultTitleEle.innerText;
-             const isEligibleTitle = eligibleTitle(resultTitle,titleFilters);
-             const locked = resultElement.classList.contains("locked");
-             if(isEligibleTitle || locked)
-             {
-                  visibleElements.push(resultElement);
-                  resultElement.style.display = '';
-             }
-             else
-             {
-                  resultElement.style.display = 'none';
-             }
-       
-        }
+    libAddBtn.addEventListener('click', createLibraryFromSelection);
 
-        return visibleElements;
-    }
-
-     function processContentFilts(resultElements = document.querySelectorAll('.result-item'))
-     {
-
-        const contentFilters = getSpBoxesValArr(contentFiltSpBoxes);
-
-        const visibleElements = [];
-
-        for (const resultElement of resultElements) {
-
-            const resultPages = resultElement.querySelectorAll('.page-item');
-            const locked = resultElement.classList.contains("locked");
-            let hiddenPages = 0;
-
-            for (const resultPage of resultPages) {
-
-                const pageContent = resultPage.querySelector('.page-contents').innerText;
-                if (!contentFilters.length || contentFilters.every(contentFilter => pageContent.toLowerCase().includes
-                        (contentFilter.toLowerCase()))) {
-                    resultPage.style.display = '';
-
-                } else {
-                    resultPage.style.display = 'none';
-                    hiddenPages++;
-
-                }
-            }
-
-            const summary = summaryMap.get(resultElement) ?? '';
-            const summaryEligible =   (!contentFilters.length || contentFilters.every(contentFilter => summary.toLowerCase().includes
-                        (contentFilter.toLowerCase())));
-            if (hiddenPages === resultPages.length && !locked && !summaryEligible) {
-                resultElement.style.display = 'none';
-            } else {
-                visibleElements.push(resultElement);
-                resultElement.style.display = '';
-            }
-        }
-
-        return visibleElements;
-
-    }
-    libAddBtn.addEventListener('click', async() => {
-      
+    libAppendBtn.addEventListener('click', () => {
         const librariesArr = getLibrariesArray();
-        const slctedLibNName = librarySele.value;
-        
-        const bibIDs = [];
-        const visibleItems = document.querySelectorAll('.result-item:not([style*="display: none"])');
-        visibleItems.forEach((item) => {
-            const bibID = item.querySelector("div.res-bib-id").textContent.trim();
-            bibIDs.push(bibID);
-        });
+        const lib = librariesArr.find(lib => lib.name === librarySele.value);
+        if (!lib) return notify('Select a library first.', 'warn');
 
-        const lib = librariesArr.find(lib => lib.name === slctedLibNName);
+        const bibIDs = getSelectionBibIDs();
+        if (!bibIDs.length) return notify(selectionEmptyMessage(), 'warn');
+
+        const before = lib.bibIDs.length;
         lib.bibIDs = removeDupesFromArr([...lib.bibIDs, ...bibIDs]);
-
         saveLibrariesArray(librariesArr);
-
+        updateLibMeta();
+        updateSourceBox();
+        notify(`Added ${lib.bibIDs.length - before} new theses to "${lib.name}".`, 'success');
     });
-    libDelBtn.addEventListener('click', async() => {
-        const slctedLibNName = librarySele.value;
 
+    libDelBtn.addEventListener('click', () => {
+        const name = librarySele.value;
         const librariesArr = getLibrariesArray();
-        const index = librariesArr.findIndex(lib => lib.name === slctedLibNName);
+        const index = librariesArr.findIndex(lib => lib.name === name);
+        if (index === -1) return notify('Select a library first.', 'warn');
+        if (!confirm(`Delete the library "${name}"? This cannot be undone.`)) return;
 
-        if(index !== -1)
-        {
-            librariesArr.splice(index, 1);
-            saveLibrariesArray(librariesArr);
-            refreshSavedLibs();
-        }
-
+        librariesArr.splice(index, 1);
+        saveLibrariesArray(librariesArr);
+        refreshSavedLibs();
+        notify(`Deleted "${name}".`);
     });
+
     libRenameBtn.addEventListener('click', async() => {
-
         const librariesArr = getLibrariesArray();
-        const librariesNames = librariesArr.map(library => library.name);
+        const name = librarySele.value;
+        const lib = librariesArr.find(lib => lib.name === name);
+        if (!lib) return notify('Select a library first.', 'warn');
 
-        const slctedLibNName = librarySele.value;
-        const newName = (await prompt(`Enter new name for "${slctedLibNName}":`, slctedLibNName))?.trim();
-        if (newName && newName !== slctedLibNName) {
-            if (librariesNames.some((libName) => libName === newName)) {
-                return alert(`A saved result named "${newName}" already exists.`);
-            }
-
-            const lib = librariesArr.find(lib => lib.name === slctedLibNName);
-            if (!lib) return alert("Select a library before renaming it.");
-            lib.name = newName;
-            saveLibrariesArray(librariesArr);
-            refreshSavedLibs(newName);
-
+        const newName = (await prompt(`Rename "${name}" to:`, name))?.trim();
+        if (!newName || newName === name) return;
+        if (librariesArr.some(other => other.name === newName)) {
+            return notify(`A library named "${newName}" already exists.`, 'warn');
         }
 
-    });
-    libSaveBtn.addEventListener('click', async() => {
-        const visibleItems = document.querySelectorAll('.result-item:not([style*="display: none"])');
-        const bibIDs = [];
-        visibleItems.forEach((item) => {
-            const bibID = item.querySelector("div.res-bib-id").textContent.trim();
-            bibIDs.push(bibID);
-        });
-
-        const librariesArr = getLibrariesArray();
-
-        const slctedLibNName = librarySele.value;
-        const libName = await prompt("Enter library name:",slctedLibNName);
-        if(libName !== null)
-        {
-            const lib = librariesArr.find(lib => lib.name === libName);
-            if(lib)
-            {
-                Object.assign(lib, {name: libName, bibIDs});
-            }
-            else
-            {
-                librariesArr.push({name: libName, bibIDs});
-            }
-
-            
-            saveLibrariesArray(librariesArr);
-            refreshSavedLibs(libName);
-
-        }
-
-
+        lib.name = newName;
+        saveLibrariesArray(librariesArr);
+        refreshSavedLibs(newName);
     });
 
-    libDownloadBtn.addEventListener('click', async() => {
-
+    libDownloadBtn.addEventListener('click', () => {
         const libraryArr = getLibrariesArray();
-        if (Array.isArray(libraryArr) && libraryArr.length) {
-            const GMT3TimeStamp = getTimeStamp();
-            const date = GMT3TimeStamp.slice(0, -4);
-            downloadJSON(libraryArr, "[EULC_SCREENER]"+"[Libraries]" + " " + date);
-        }
-
+        if (!libraryArr.length) return notify('There are no libraries to export.', 'warn');
+        const date = getTimeStamp().slice(0, -4);
+        downloadJSON(libraryArr, "[EULC_SCREENER]"+"[Libraries]" + " " + date);
     });
 
-    libImportBtn.addEventListener('click', async() => {
+    libImportBtn.addEventListener('click', () => importLibInput.click());
 
-        importLibInput.click();
-
-    });
-
+    // Imported libraries are merged in; a library with the same name is replaced
     importLibInput.addEventListener('change', async() => {
-
         const file = importLibInput.files[0];
-        if (file.type === IMPORT_FILE_TYPES.JSON) {
-            const jsonArr = await readJsonFile(file);
-            if (jsonArr) {
-                if (isValidLibJson(jsonArr)) {
-                    saveLibrariesArray(jsonArr);
-                    refreshSavedLibs();
-                }
-            }
+        importLibInput.value = '';
+        if (!file) return;
+
+        const jsonArr = file.type === IMPORT_FILE_TYPES.JSON ? await readJsonFile(file) : null;
+        if (!jsonArr || !isValidLibJson(jsonArr)) {
+            return notify('That file is not an exported library list.', 'warn');
         }
 
-        importLibInput.value = '';
+        const librariesArr = getLibrariesArray();
+        for (const imported of jsonArr) {
+            const existing = librariesArr.find(lib => lib.name === imported.name);
+            if (existing) existing.bibIDs = imported.bibIDs;
+            else librariesArr.push({ name: imported.name, bibIDs: imported.bibIDs });
+        }
+        saveLibrariesArray(librariesArr);
+        refreshSavedLibs(jsonArr[0].name);
+        notify(`Imported ${jsonArr.length} ${jsonArr.length === 1 ? 'library' : 'libraries'}.`, 'success');
     });
+
+    /* ---------- Search archive ---------- */
 
     dbSaveButton.addEventListener('click', async() => {
+        if (mode !== 'search') return;
 
         const resultItems = getResultItems();
         if (!resultItems.length) {
-            return console.log("No results to save");
+            return notify('Run a search first: there are no results to archive.', 'warn');
         }
 
         const GMT3TimeStamp = getTimeStamp();
@@ -509,29 +355,26 @@ export function initScreener(_scraperCallback) {
             resultItems
         });
 
-        refreshSavedTitles({titleSlctName: meta.title});
-
+        await refreshSavedTitles({titleSlctName: meta.title});
+        notify(`Archived ${resultItems.length} results.`, 'success');
     });
 
+    // Opening an archived search always lands in Search mode
     dbLoadButton.addEventListener('click', async() => {
-
         const selectedTitle = savedResultsSele.value;
-
-        if (!selectedTitle) 
-        {
-            return console.log("No title selected.");
-
-        }
+        if (!selectedTitle) return notify('Select an archived search first.', 'warn');
 
         const savedResult = await screenerDB.getSavedResult(selectedTitle);
-
         if (!savedResult) {
-            return console.error(`Couldn't find an entry named "${selectedTitle}" in the database.`);
+            return notify(`Couldn't find "${selectedTitle}" in the archive.`, 'warn');
         }
 
-        summaryMap.clear();
-        screenerResGrp.innerHTML = "";
+        if (searchButton.disabled || batchBusy) {
+            return notify('Wait for the current operation to finish first.', 'warn');
+        }
+        if (mode !== 'search') setMode('search');
 
+        screenerResGrp.replaceChildren();
 
         searchParams = savedResult.meta.searchParams;
         const resultItems = savedResult.resultItems;
@@ -539,109 +382,69 @@ export function initScreener(_scraperCallback) {
 
         resetSpBox(contentFiltSpBoxes, false);
         resetSpBox(titleFiltSpBoxes, false);
-    
-        resultItmsNumLog.innerText = visResultItmsNumLog.innerText = resultItems.length;
 
+        resultItmsNumLog.innerText = visResultItmsNumLog.innerText = resultItems.length;
+        updateSelectionUI();
     });
 
     dbRenameButton.addEventListener('click', async() => {
-
-        
         const selectedTitle = savedResultsSele.value;
-        
-
-        if (!selectedTitle) {
-            return console.log("No title selected.");
-
-        }
+        if (!selectedTitle) return notify('Select an archived search first.', 'warn');
 
         const savedResult = await screenerDB.getSavedResult(selectedTitle);
-
         if (!savedResult) {
-            return console.error(`Couldn't find an entry named "${selectedTitle}" in the database.`);
+            return notify(`Couldn't find "${selectedTitle}" in the archive.`, 'warn');
         }
 
         const allTitles = await screenerDB.getAllSavResTitles();
 
-        const newTitle = (await prompt(`Enter new name for "${selectedTitle}":`, selectedTitle))?.trim();
-        if (newTitle) {
-
-            if (allTitles.some((title) => title === newTitle)) {
-                return alert(`A saved result named "${newTitle}" already exists.`);
-            }
-
-            savedResult.meta.title = newTitle;
-
-            await screenerDB.deleteResult(selectedTitle);
-            await screenerDB.saveResult(savedResult);
-   
-            refreshSavedTitles({titleSlctName: newTitle});
-
+        const newTitle = (await prompt(`Rename "${selectedTitle}" to:`, selectedTitle))?.trim();
+        if (!newTitle || newTitle === selectedTitle) return;
+        if (allTitles.some((title) => title === newTitle)) {
+            return notify(`An archived search named "${newTitle}" already exists.`, 'warn');
         }
 
+        savedResult.meta.title = newTitle;
+        await screenerDB.deleteResult(selectedTitle);
+        await screenerDB.saveResult(savedResult);
+        refreshSavedTitles({titleSlctName: newTitle});
     });
 
     dbDeleteButton.addEventListener('click', async() => {
+        const selectedTitle = savedResultsSele.value;
+        if (!selectedTitle) return notify('Select an archived search first.', 'warn');
 
         const allTitles = await screenerDB.getAllSavResTitles();
-        const selectedTitle = savedResultsSele.value;
-
-        if (!selectedTitle) {
-            return console.log("No title selected.");
-
-        }
-        if (!allTitles) {
-            return console.warn("No saved results in database.");
-
-        }
         if (!allTitles.includes(selectedTitle)) {
-            return console.error(`Couldn't find an entry named "${selectedTitle}" in the database.`);
+            return notify(`Couldn't find "${selectedTitle}" in the archive.`, 'warn');
         }
 
-        const confirmDelete = confirm(`Are you sure you want to delete "${selectedTitle}"?`);
-        if (confirmDelete) {
-
+        if (confirm(`Delete the archived search "${selectedTitle}"?`)) {
             await screenerDB.deleteResult(selectedTitle);
             refreshSavedTitles();
-
         }
     });
 
     dbDownloadButton.addEventListener('click', async() => {
-
-        const allResults = await screenerDB.getAllSavedResults();
         const selectedTitle = savedResultsSele.value;
-        const savedResult = allResults.find(result => result.meta.title === selectedTitle);
+        if (!selectedTitle) return notify('Select an archived search first.', 'warn');
 
-        if (!selectedTitle) {
-            return console.log("No title selected.");
-
-        }
-
-        if (!allResults.length) {
-            return console.warn("No saved results in database.");
-
-        }
-
+        const savedResult = await screenerDB.getSavedResult(selectedTitle);
         if (!savedResult) {
-            return console.error(`Couldn't find an entry named "${selectedTitle}" in the database.`);
+            return notify(`Couldn't find "${selectedTitle}" in the archive.`, 'warn');
         }
 
         downloadJSON(savedResult, "[EULC_SCREENER]"+"[DB]" + " " + selectedTitle);
-
     });
 
     dbDownloadALLButton.addEventListener('click', async() => {
         const results = await screenerDB.getAllSavedResults();
+        if (!results.length) return notify('The archive is empty.', 'warn');
         const dataStreamsArr = results.map(result => ({fileName: result.meta.title , fileContent:result}));
-        const GMT3TimeStamp = getTimeStamp();
         downloadJSONZIP(dataStreamsArr, "[EULC_SCREENER]"+"[DBs]" + " " + getTimeStamp());
-
     });
 
-    importButton.addEventListener('click', async() => {
-        importFileInput.click();
-    });
+    importButton.addEventListener('click', () => importFileInput.click());
 
     importFileInput.addEventListener('change', async() => {
 
@@ -651,52 +454,48 @@ export function initScreener(_scraperCallback) {
                 let title = jsonObj.meta.title;
 
                 if (allTitles.includes(title)) {
-                    const GMT3TimeStamp = getTimeStamp();
-                    title += ' ' + GMT3TimeStamp;
+                    title += ' ' + getTimeStamp();
                 }
 
                 jsonObj.meta.title = title;
 
                 await screenerDB.saveResult(jsonObj);
                 return title;
-
             }
-
         }
 
         const file = importFileInput.files[0];
+        importFileInput.value = '';
+        if (!file) return;
 
+        let lastTitle, imported = 0;
         if (file.type === IMPORT_FILE_TYPES.JSON) {
-
             const jsonObj = await readJsonFile(file);
             if (jsonObj) {
-
-                const savedTitle = await importJsonObj(jsonObj);
-                refreshSavedTitles({titleSlctName: savedTitle});
+                lastTitle = await importJsonObj(jsonObj);
+                if (lastTitle) imported++;
             }
         } else if (file.type === IMPORT_FILE_TYPES.ZIP) {
             const jsonFiles = await unZipFilesAsText(file, 'json');
-            const jsonObjs = jsonFiles.map(jsonFile => JSON.parse(jsonFile.fileContent));
-
-            for (let [index, jsonObj] of jsonObjs.entries()) {
-                const savedTitle = await importJsonObj(jsonObj);
-                if (index === jsonObjs.length - 1) {
-                    refreshSavedTitles({titleSlctName: savedTitle});
-                }
+            for (const jsonFile of jsonFiles) {
+                const title = await importJsonObj(JSON.parse(jsonFile.fileContent));
+                if (title) { lastTitle = title; imported++; }
             }
-
         }
 
-        importFileInput.value = '';
-
+        if (!imported) return notify('No archived searches were found in that file.', 'warn');
+        refreshSavedTitles({titleSlctName: lastTitle});
+        notify(`Imported ${imported} archived ${imported === 1 ? 'search' : 'searches'}.`, 'success');
     });
+
+    /* ---------- Batch transcript actions (Search mode) ---------- */
 
     scrapAllBtn.addEventListener('click', async() => {
 
         const results = getVisibleResultsMeta();
 
         if (!results.length) {
-            return console.warn("No visible results to scrap.");
+            return notify('There are no visible results to collect.', 'warn');
         }
 
         await runBatch(results, async(result, index) => {
@@ -708,7 +507,7 @@ export function initScreener(_scraperCallback) {
                 }
             }
 
-            progressStatus.textContent = `Scrapping ${result.bibID} (${index + 1} of ${results.length})...`;
+            progressStatus.textContent = `Collecting ${result.bibID} (${index + 1} of ${results.length})...`;
             await scrapResultToCache(result);
 
         });
@@ -720,7 +519,7 @@ export function initScreener(_scraperCallback) {
         const results = getVisibleResultsMeta();
 
         if (!results.length) {
-            return console.warn("No visible results to download.");
+            return notify('There are no visible results to export.', 'warn');
         }
 
         if (typeof window.appAPI?.htmlToPdfBuffer !== 'function') {
@@ -736,7 +535,7 @@ export function initScreener(_scraperCallback) {
             let record = await cacheDB.getSavedResult(result.bibID);
 
             if (!record?.ok) {
-                progressStatus.textContent = `Scrapping ${result.bibID} (${index + 1} of ${results.length})...`;
+                progressStatus.textContent = `Collecting ${result.bibID} (${index + 1} of ${results.length})...`;
                 record = await scrapResultToCache(result);
             }
 
@@ -759,7 +558,7 @@ export function initScreener(_scraperCallback) {
         });
 
         if (!files.length) {
-            return console.warn("No PDFs were produced.");
+            return notify('No PDFs were produced.', 'warn');
         }
 
         downloadFilesZIP(files, "[EULC_SCREENER]" + "[PDFs]" + " " + getTimeStamp().slice(0, -4));
@@ -767,9 +566,692 @@ export function initScreener(_scraperCallback) {
     });
 
 }
+
 /***********************************************
- *               FUNCTIONS     			       *
+ *               SEARCHES                      *
  ***********************************************/
+
+async function runThesisSearch()
+{
+    let queries = searchQueries.values();
+    if (!queries.length) {
+        queries = [{ text: QUERY_PLACEHOLDER, must: true }];
+    }
+
+    const bibID = isInteger(bibIDInput.value.trim()) ? bibIDInput.value.trim() : '';
+    const pagesStart = pagesStartInput.value;
+    const pagesEnd = pagesEndInput.value;
+    const years = searchYears.get();
+    const yearsStart = years.start || String(MIN_YEAR);
+    const yearsEnd = years.end || String(new Date().getFullYear());
+    const libraryName = librarySele.value;
+
+    searchParams = {
+        query: queries.map(q => q.text).join(', '),
+        queries,
+        pagesStart,
+        pagesEnd,
+        yearsStart,
+        yearsEnd,
+        yearMode: years.mode,
+        libraryName,
+        bibID,
+        libBuilder: false
+    };
+    localStorage.setItem(PREV_SEARCH_PARAMS, JSON.stringify(searchParams));
+
+    const bibIDs = (bibID && [bibID]) || getLibrariesArray().find(library => library.name === libraryName)?.bibIDs;
+    if (!Array.isArray(bibIDs) || !bibIDs.length) {
+        throw new Error("Select a library that contains theses, or enter a BibID, before searching.");
+    }
+
+    clearResults();
+
+    const progressObj = new Progress(bibIDs.length * queries.length, progressBar, progressStatus);
+    const resultsNum = await getBibs(bibIDs, queries, yearsStart, yearsEnd, pagesStart, pagesEnd, progressObj, setResItemForRender);
+
+    resetSpBox(titleFiltSpBoxes, false);
+    resetSpBox(contentFiltSpBoxes, false);
+
+    resultItmsNumLog.innerText = visResultItmsNumLog.innerText = resultsNum;
+}
+
+async function runBuilderSearch()
+{
+    const params = readBuilderForm();
+    localStorage.setItem(PREV_BUILDER_PARAMS, JSON.stringify(params));
+
+    let queries = params.queries;
+    if (!queries.length) {
+        // EULC needs some search text; the full-text box alone is enough when given
+        queries = [{ text: params.eulc.fullText ? '' : QUERY_PLACEHOLDER, must: true, field: EULC_DEFAULT_FIELD }];
+    }
+
+    // Checked rows survive a new search while "Always show checked rows" is on
+    const kept = keepCheckedChBx.checked ? [...screenerResGrp.querySelectorAll('.result-item.checked')] : [];
+    const keptIDs = new Set(kept.map(item => item.dataset.bibId));
+    clearResults();
+    screenerResGrp.append(...kept);
+    if (kept.length) screenerResCntr.classList.remove('hidden');
+
+    const progressObj = new Progress(1, progressBar, progressStatus);
+    progressStatus.textContent = `Querying the EULC catalogue (${queries.length} ${queries.length === 1 ? 'request' : 'requests'})…`;
+
+    await getLib({ ...params, queries }, progressObj, (record) => {
+        if (!keptIDs.has(record.bibID)) setResItemForRender(record);
+    });
+
+    resetSpBox(titleFiltSpBoxes, false);
+    resetSpBox(contentFiltSpBoxes, false);
+
+    resultItmsNumLog.innerText = visResultItmsNumLog.innerText = screenerResGrp.children.length;
+    processFilters();
+}
+
+function readBuilderForm()
+{
+    const years = builderYears.get();
+    return {
+        queries: builderQueries.values(),
+        years,
+        pages: { min: builderPagesMinInput.value, max: builderPagesMaxInput.value },
+        eulc: {
+            scope: builderScopeSele.value,
+            wordForms: builderWordFormsSele.value,
+            fullText: builderFullTextInput.value.trim(),
+            bibRange: builderBibRangeInput.value.trim(),
+            order: builderOrderSele.value,
+            exact: builderExactChBx.checked
+        }
+    };
+}
+
+function clearResults()
+{
+    screenerResGrp.replaceChildren();
+    resultItmsNumLog.innerText = visResultItmsNumLog.innerText = "";
+}
+
+/***********************************************
+ *               MODES                         *
+ ***********************************************/
+
+function setMode(next)
+{
+    if (next === mode) return;
+    if (searchButton.disabled || batchBusy) {
+        return notify('Wait for the current operation to finish before switching mode.', 'warn');
+    }
+
+    stashedResults[mode] = {
+        nodes: [...screenerResGrp.children],
+        total: resultItmsNumLog.innerText,
+        titleFilters: getSpBoxesValArr(titleFiltSpBoxes),
+        contentFilters: getSpBoxesValArr(contentFiltSpBoxes),
+        shown: !screenerResCntr.classList.contains('hidden')
+    };
+
+    mode = next;
+    localStorage.setItem(MODE_STOR_KEY, mode);
+
+    const restored = stashedResults[mode];
+    screenerResGrp.replaceChildren(...(restored?.nodes ?? []));
+    resultItmsNumLog.innerText = restored?.total ?? '';
+    resetSpBox(titleFiltSpBoxes, false);
+    resetSpBox(contentFiltSpBoxes, false);
+    fillSpBoxBox(titleFiltSpBoxes, restored?.titleFilters ?? []);
+    fillSpBoxBox(contentFiltSpBoxes, restored?.contentFilters ?? []);
+    screenerResCntr.classList.toggle('hidden', !restored?.shown);
+
+    progressBar.style.width = '0%';
+    progressStatus.textContent = '';
+
+    applyMode();
+    processFilters();
+}
+
+function applyMode()
+{
+    workspace.dataset.mode = mode;
+    for (const tab of modeTabs) {
+        tab.setAttribute('aria-selected', String(tab.dataset.mode === mode));
+    }
+
+    const text = MODE_TEXT[mode];
+    searchHeading.textContent = text.heading;
+    searchSub.textContent = text.sub;
+    searchButtonLabel.textContent = text.button;
+    resultsHeading.textContent = text.results;
+    searchButton.querySelector('use').setAttribute('href', mode === 'builder' ? '#i-builder' : '#i-search');
+
+    dbSaveButton.disabled = mode !== 'search';
+    dbSaveButton.title = mode === 'search' ? 'Archive the current results' : 'Archiving is available in Search mode';
+    archiveHint.textContent = mode === 'search'
+        ? 'Archive the current results to reopen them later.'
+        : 'Archiving works in Search mode. Open still works and switches to Search mode.';
+
+    updateSourceBox();
+    updateSelectionUI();
+}
+
+function setModeTabsDisabled(disabled)
+{
+    for (const tab of modeTabs) tab.disabled = disabled;
+}
+
+/***********************************************
+ *               SELECTION                     *
+ ***********************************************/
+
+function getVisibleItems()
+{
+    return [...screenerResGrp.querySelectorAll('.result-item')].filter(item => item.style.display !== 'none');
+}
+
+/* What the library buttons act on: checked rows in Builder mode,
+   the visible results in Search mode. */
+function getSelectionBibIDs()
+{
+    const items = mode === 'builder'
+        ? screenerResGrp.querySelectorAll('.result-item.checked')
+        : getVisibleItems();
+    return removeDupesFromArr([...items].map(item => item.dataset.bibId));
+}
+
+function selectionEmptyMessage()
+{
+    return mode === 'builder' ? 'Check at least one thesis first.' : 'There are no visible results to add.';
+}
+
+function setItemChecked(item, checked)
+{
+    item.classList.toggle('checked', checked);
+    const box = item.querySelector('.res-check input');
+    if (box) box.checked = checked;
+}
+
+function updateSelectionUI()
+{
+    const checked = screenerResGrp.querySelectorAll('.result-item.checked').length;
+    checkedNumLog.innerText = mode === 'builder' && screenerResGrp.children.length ? checked : '';
+    barNewLibBtn.disabled = !checked;
+
+    if (mode === 'builder') {
+        libHint.textContent = checked
+            ? `New library and Add to selected use the ${checked} checked ${checked === 1 ? 'thesis' : 'theses'}.`
+            : 'Check theses in the results, then create a library or add them to the selected one.';
+    } else {
+        const visible = getVisibleItems().length;
+        libHint.textContent = visible
+            ? `New library and Add to selected use the ${visible} visible ${visible === 1 ? 'result' : 'results'}.`
+            : 'The selected library is the source for Search mode.';
+    }
+}
+
+async function createLibraryFromSelection()
+{
+    const bibIDs = getSelectionBibIDs();
+    if (mode === 'builder' && !bibIDs.length) return notify(selectionEmptyMessage(), 'warn');
+
+    const librariesArr = getLibrariesArray();
+    const name = (await prompt(bibIDs.length ? `Name the new library (${bibIDs.length} theses):` : 'Name the new, empty library:', ''))?.trim();
+    if (!name) return;
+    if (librariesArr.some(lib => lib.name === name)) {
+        return notify(`A library named "${name}" already exists. Use Add to selected to extend it.`, 'warn');
+    }
+
+    librariesArr.push({ name, bibIDs });
+    saveLibrariesArray(librariesArr);
+    refreshSavedLibs(name);
+    notify(`Created "${name}" with ${bibIDs.length} ${bibIDs.length === 1 ? 'thesis' : 'theses'}.`, 'success');
+}
+
+/***********************************************
+ *               FILTERS                       *
+ ***********************************************/
+
+function processFilters()
+{
+    const visibleElements = processTitleFilts();
+    const visibleElementsII = processContentFilts(visibleElements);
+
+    visResultItmsNumLog.innerText = screenerResGrp.children.length || resultItmsNumLog.innerText ? visibleElementsII.length : '';
+    updateSelectionUI();
+}
+
+function isPinned(resultElement)
+{
+    return mode === 'builder' && keepCheckedChBx.checked && resultElement.classList.contains('checked');
+}
+
+function processTitleFilts(resultElements = screenerResGrp.querySelectorAll('.result-item'))
+{
+    const titleFilters = getSpBoxesValArr(titleFiltSpBoxes);
+    const visibleElements = [];
+
+    for (const resultElement of resultElements) {
+        const resultTitle = resultElement.querySelector(".result-title").innerText;
+        if (eligibleTitle(resultTitle, titleFilters) || isPinned(resultElement)) {
+            visibleElements.push(resultElement);
+            resultElement.style.display = '';
+        } else {
+            resultElement.style.display = 'none';
+        }
+    }
+
+    return visibleElements;
+}
+
+function processContentFilts(resultElements = screenerResGrp.querySelectorAll('.result-item'))
+{
+    const contentFilters = getSpBoxesValArr(contentFiltSpBoxes).map(filter => filter.toLowerCase());
+    const includesAll = text => contentFilters.every(filter => text.toLowerCase().includes(filter));
+    const visibleElements = [];
+
+    for (const resultElement of resultElements) {
+        const resultPages = resultElement.querySelectorAll('.page-item');
+        let hiddenPages = 0;
+
+        for (const resultPage of resultPages) {
+            const pageContent = resultPage.querySelector('.page-contents').innerText;
+            if (!contentFilters.length || includesAll(pageContent)) {
+                resultPage.style.display = '';
+            } else {
+                resultPage.style.display = 'none';
+                hiddenPages++;
+            }
+        }
+
+        const summary = summaryMap.get(resultElement) ?? '';
+        const summaryEligible = !contentFilters.length || (summary && includesAll(summary));
+        if (hiddenPages === resultPages.length && !summaryEligible && !isPinned(resultElement)) {
+            resultElement.style.display = 'none';
+        } else {
+            visibleElements.push(resultElement);
+            resultElement.style.display = '';
+        }
+    }
+
+    return visibleElements;
+}
+
+/***********************************************
+ *               FORM COMPONENTS               *
+ ***********************************************/
+
+/* A list of query rows: [Required] [field] [text] [remove].
+   A lone row is always required and cannot be unticked. Adding the
+   second row unticks the first; every added row starts optional. */
+function createQueryList(container, addButton, { placeholder, noun, withField = false })
+{
+    container.classList.toggle('with-field', withField);
+
+    const rows = () => [...container.querySelectorAll('.query-row')];
+
+    function sync()
+    {
+        const all = rows();
+        const single = all.length === 1;
+        for (const row of all) {
+            const must = row.querySelector('.query-must input');
+            if (single) must.checked = true;
+            must.disabled = single;
+            row.querySelector('.query-must').title = single
+                ? `A single ${noun} is always required`
+                : 'Ticked: must match. Unticked: optional';
+            row.classList.toggle('is-required', must.checked);
+            row.querySelector('.query-remove').hidden = single;
+        }
+        addButton.disabled = all.length >= MAX_QUERIES;
+    }
+
+    function addRow({ text = '', must = false, field = EULC_DEFAULT_FIELD } = {})
+    {
+        const row = document.createElement('div');
+        row.className = 'query-row';
+
+        const mustLabel = document.createElement('label');
+        mustLabel.className = 'query-must';
+        const mustBox = document.createElement('input');
+        mustBox.type = 'checkbox';
+        mustBox.checked = must;
+        mustBox.addEventListener('change', sync);
+        const mustText = document.createElement('span');
+        mustText.textContent = 'Required';
+        mustLabel.append(mustBox, mustText);
+        row.append(mustLabel);
+
+        if (withField) {
+            const fieldSele = document.createElement('select');
+            fieldSele.className = 'query-field';
+            fieldSele.setAttribute('aria-label', 'Catalogue field');
+            fillSelect(fieldSele, EULC_FIELDS, field);
+            row.append(fieldSele);
+        }
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'query-text';
+        input.placeholder = placeholder;
+        input.autocomplete = 'off';
+        input.value = text;
+        input.setAttribute('aria-label', `Search ${noun}`);
+        row.append(input);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'query-remove';
+        remove.setAttribute('aria-label', `Remove this ${noun}`);
+        remove.title = `Remove this ${noun}`;
+        remove.innerHTML = '<svg class="ico"><use href="#i-x"/></svg>';
+        remove.addEventListener('click', () => {
+            const next = row.nextElementSibling ?? row.previousElementSibling;
+            row.remove();
+            sync();
+            next?.querySelector('.query-text')?.focus();
+        });
+        row.append(remove);
+
+        container.append(row);
+        return row;
+    }
+
+    addButton.addEventListener('click', () => {
+        const all = rows();
+        if (all.length >= MAX_QUERIES) return;
+        if (all.length === 1) all[0].querySelector('.query-must input').checked = false;
+        addRow().querySelector('.query-text').focus();
+        sync();
+    });
+
+    function set(list = [])
+    {
+        container.replaceChildren();
+        const entries = list.length ? list.slice(0, MAX_QUERIES) : [{}];
+        for (const entry of entries) addRow(entry);
+        sync();
+    }
+
+    function values()
+    {
+        return rows().map(row => ({
+            text: row.querySelector('.query-text').value.trim(),
+            must: row.querySelector('.query-must input').checked,
+            ...(withField ? { field: row.querySelector('.query-field').value } : {})
+        })).filter(query => query.text);
+    }
+
+    set();
+    return { set, values };
+}
+
+/* Publication years with a Range / Exact switch. Exact keeps one box and
+   sends it as both ends. Switching to Exact keeps the start year (or the
+   end year when the start is empty); switching back fills both ends. */
+function createYearField(host, idPrefix)
+{
+    const maxYear = new Date().getFullYear() + 1;
+    host.innerHTML = `
+        <div class="field-label-row">
+            <label class="field-label" for="${idPrefix}YearStart">Publication years</label>
+            <div class="mini-toggle" role="group" aria-label="Year mode">
+                <button type="button" data-year-mode="range" aria-pressed="true">Range</button>
+                <button type="button" data-year-mode="exact" aria-pressed="false">Exact</button>
+            </div>
+        </div>
+        <div class="range-field year-range">
+            <input type="number" id="${idPrefix}YearStart" min="${MIN_YEAR}" max="${maxYear}" placeholder="From" aria-label="First publication year">
+            <span aria-hidden="true">to</span>
+            <input type="number" id="${idPrefix}YearEnd" min="${MIN_YEAR}" max="${maxYear}" placeholder="To" aria-label="Last publication year">
+        </div>
+        <div class="year-exact" hidden>
+            <input type="number" id="${idPrefix}YearExact" min="${MIN_YEAR}" max="${maxYear}" placeholder="Year" aria-label="Publication year">
+        </div>`;
+
+    const start = host.querySelector(`#${idPrefix}YearStart`);
+    const end = host.querySelector(`#${idPrefix}YearEnd`);
+    const exact = host.querySelector(`#${idPrefix}YearExact`);
+    const rangeBox = host.querySelector('.year-range');
+    const exactBox = host.querySelector('.year-exact');
+    const toggles = host.querySelectorAll('[data-year-mode]');
+    let yearMode = 'range';
+
+    function show(next)
+    {
+        yearMode = next;
+        rangeBox.hidden = next !== 'range';
+        exactBox.hidden = next !== 'exact';
+        for (const toggle of toggles) toggle.setAttribute('aria-pressed', String(toggle.dataset.yearMode === next));
+    }
+
+    for (const toggle of toggles) {
+        toggle.addEventListener('click', () => {
+            const next = toggle.dataset.yearMode;
+            if (next === yearMode) return;
+            if (next === 'exact') {
+                exact.value = start.value || end.value;
+            } else {
+                start.value = end.value = exact.value;
+            }
+            show(next);
+            (next === 'exact' ? exact : start).focus();
+        });
+    }
+
+    return {
+        get() {
+            if (yearMode === 'exact') {
+                return { mode: 'exact', start: exact.value.trim(), end: exact.value.trim() };
+            }
+            return { mode: 'range', start: start.value.trim(), end: end.value.trim() };
+        },
+        set({ mode: nextMode = 'range', start: s = '', end: e = '' } = {}) {
+            if (nextMode === 'exact') {
+                exact.value = s || e;
+                start.value = end.value = exact.value;
+            } else {
+                start.value = s;
+                end.value = e;
+                exact.value = s || e;
+            }
+            show(nextMode === 'exact' ? 'exact' : 'range');
+        }
+    };
+}
+
+function fillSelect(select, options, selectedValue)
+{
+    select.replaceChildren(...options.map(({ value, label }) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        return option;
+    }));
+    select.value = selectedValue;
+}
+
+/***********************************************
+ *               PARAMETERS                    *
+ ***********************************************/
+
+function readPrevParams(forMode)
+{
+    try {
+        if (forMode === 'builder') {
+            const stored = JSON.parse(localStorage.getItem(PREV_BUILDER_PARAMS));
+            if (stored) return stored;
+            // Older versions stored builder searches with the ordinary parameters
+            const legacy = JSON.parse(localStorage.getItem(PREV_SEARCH_PARAMS));
+            if (legacy?.libBuilder) {
+                return {
+                    queries: legacyQueries(legacy).map(q => ({ ...q, field: EULC_DEFAULT_FIELD })),
+                    years: { start: legacy.yearsStart, end: legacy.yearsEnd },
+                    pages: { min: legacy.pagesStart || '' }
+                };
+            }
+            return null;
+        }
+        const stored = JSON.parse(localStorage.getItem(PREV_SEARCH_PARAMS));
+        if (!stored || stored.libBuilder) return stored && { ...stored, queries: [] , libBuilder: false };
+        return stored;
+    } catch {
+        return null;
+    }
+}
+
+/* Old parameters kept all words in one comma-joined string, all required. */
+function legacyQueries(params)
+{
+    if (Array.isArray(params.queries)) return params.queries;
+    const words = (params.query || '').split(', ').map(w => w.trim()).filter(w => w && w !== QUERY_PLACEHOLDER);
+    return words.map(text => ({ text, must: true }));
+}
+
+function applySearchParams(params)
+{
+    if (!params) {
+        searchYears.set({ start: String(DEFAULT_START_YEAR), end: String(DEFAULT_END_YEAR) });
+        return;
+    }
+    searchQueries.set(legacyQueries(params).filter(q => q.text !== QUERY_PLACEHOLDER));
+    if (params.pagesStart !== undefined) pagesStartInput.value = params.pagesStart;
+    if (params.pagesEnd !== undefined) pagesEndInput.value = params.pagesEnd;
+    searchYears.set({ mode: params.yearMode, start: params.yearsStart ?? '', end: params.yearsEnd ?? '' });
+    bibIDInput.value = params.bibID ?? '';
+    if (params.libraryName && [...librarySele.options].some(o => o.value === params.libraryName)) {
+        librarySele.value = params.libraryName;
+        updateLibMeta();
+    }
+    updateSourceBox();
+}
+
+function applyBuilderParams(params)
+{
+    if (!params) {
+        builderYears.set({ start: String(DEFAULT_START_YEAR), end: String(DEFAULT_END_YEAR) });
+        return;
+    }
+    builderQueries.set((params.queries || []).filter(q => q.text !== QUERY_PLACEHOLDER));
+    builderYears.set(params.years || {});
+    builderPagesMinInput.value = params.pages?.min ?? '';
+    builderPagesMaxInput.value = params.pages?.max ?? '';
+    const eulc = params.eulc || {};
+    builderScopeSele.value = eulc.scope || EULC_DEFAULT_SCOPE;
+    builderWordFormsSele.value = eulc.wordForms || '';
+    builderFullTextInput.value = eulc.fullText || '';
+    builderBibRangeInput.value = eulc.bibRange || '';
+    builderOrderSele.value = eulc.order || EULC_DEFAULT_ORDER;
+    builderExactChBx.checked = Boolean(eulc.exact);
+}
+
+/***********************************************
+ *               LIBRARIES                     *
+ ***********************************************/
+
+function refreshSavedLibs(libToSelect = null)
+{
+    const previous = librarySele.value;
+    const libraries = getLibrariesArray();
+    librarySele.replaceChildren(...libraries.map(({ name }) => {
+        const option = document.createElement('option');
+        option.value = option.textContent = name;
+        return option;
+    }));
+    if (!libraries.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No libraries yet';
+        option.disabled = true;
+        librarySele.append(option);
+    }
+    const names = libraries.map(lib => lib.name);
+    librarySele.value = names.includes(libToSelect) ? libToSelect : (names.includes(previous) ? previous : (names[0] ?? ''));
+    updateLibMeta();
+    updateSourceBox();
+}
+
+function updateLibMeta()
+{
+    const libraries = getLibrariesArray();
+    const lib = libraries.find(lib => lib.name === librarySele.value);
+    libMeta.textContent = lib ? `${lib.bibIDs.length} ${lib.bibIDs.length === 1 ? 'thesis' : 'theses'}` : `${libraries.length} saved`;
+    for (const btn of [libRenameBtn, libDelBtn, libAppendBtn]) btn.disabled = !lib;
+    libDownloadBtn.disabled = !libraries.length;
+}
+
+function updateSourceBox()
+{
+    const bibID = bibIDInput.value.trim();
+    if (isInteger(bibID)) {
+        searchSource.innerHTML = '';
+        searchSource.append(sourceLine('Single thesis', `BibID ${bibID}`));
+        return;
+    }
+    const lib = getLibrariesArray().find(lib => lib.name === librarySele.value);
+    searchSource.innerHTML = '';
+    searchSource.append(lib
+        ? sourceLine(lib.name, `${lib.bibIDs.length} theses · change it in Libraries`)
+        : sourceLine('No library selected', 'Create or import one in Libraries'));
+}
+
+function sourceLine(title, note)
+{
+    const wrap = document.createDocumentFragment();
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    const small = document.createElement('small');
+    small.textContent = note;
+    wrap.append(strong, small);
+    return wrap;
+}
+
+async function refreshSavedTitles({ titleSlctName = "", titleSlctIndx = -1 } = {})
+{
+    const allResults = await screenerDB.getAllSavedResults();
+    const allTitles = allResults.sort((resultA, resultB) => {
+        const dateA = resultA.meta.date;
+        const dateB = resultB.meta.date;
+        if (dateB < dateA) return -1;
+        if (dateB > dateA) return 1;
+        return 0;
+    }).map(result => result.meta.title);
+
+    const previous = savedResultsSele.value;
+    savedResultsSele.replaceChildren(...allTitles.map(title => {
+        const option = document.createElement('option');
+        option.value = option.textContent = title;
+        return option;
+    }));
+    if (!allTitles.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'Nothing archived yet';
+        option.disabled = true;
+        savedResultsSele.append(option);
+    }
+
+    savedResultsSele.value = allTitles.includes(titleSlctName) ? titleSlctName
+        : (allTitles[titleSlctIndx] ?? (allTitles.includes(previous) ? previous : (allTitles[0] ?? '')));
+
+    archiveMeta.textContent = `${allTitles.length} saved`;
+    for (const btn of [dbLoadButton, dbRenameButton, dbDownloadButton, dbDeleteButton, dbDownloadALLButton]) {
+        btn.disabled = !allTitles.length;
+    }
+}
+
+function getLibrariesArray(key = LIB_STOR_KEY)
+{
+    try {
+        const libData = JSON.parse(localStorage.getItem(key));
+        return Array.isArray(libData) ? libData : [];
+    } catch {
+        return [];
+    }
+}
+function saveLibrariesArray(libArr, key = LIB_STOR_KEY)
+{
+	localStorage.setItem(key,JSON.stringify(libArr));
+}
 
 /***********************************************
  *      BATCH OPS OVER VISIBLE RESULTS         *
@@ -777,9 +1259,7 @@ export function initScreener(_scraperCallback) {
 
 function getVisibleResultsMeta()
 {
-    const visibleItems = document.querySelectorAll('.result-item:not([style*="display: none"])');
-
-    return Array.from(visibleItems).map(item => ({
+    return getVisibleItems().map(item => ({
         bibID:         item.querySelector('.res-bib-id').textContent.trim(),
         title:         item.querySelector('.result-title').textContent.trim(),
         publishYear:   item.querySelector('.result-year').textContent.trim(),
@@ -827,11 +1307,12 @@ async function scrapResultToCache(result)
 async function runBatch(results, worker)
 {
     if (batchBusy) {
-        return console.warn("A batch operation is already running.");
+        return notify('A batch operation is already running.', 'warn');
     }
 
     batchBusy = true;
     scrapAllBtn.disabled = downloadAllBtn.disabled = searchButton.disabled = true;
+    setModeTabsDisabled(true);
 
     const progressObj = new Progress(results.length, progressBar, progressStatus);
     const failed = [];
@@ -850,6 +1331,7 @@ async function runBatch(results, worker)
     } finally {
         batchBusy = false;
         scrapAllBtn.disabled = downloadAllBtn.disabled = searchButton.disabled = false;
+        setModeTabsDisabled(false);
 
         if (failed.length) {
             progressStatus.textContent += ` | failed: ${failed.join(', ')}`;
@@ -859,15 +1341,12 @@ async function runBatch(results, worker)
 
 function isValidLibJson(jsonArr) {
 	 return (
-	 typeof jsonArr 		=== 'object' &&
-	 Array.isArray(jsonArr) === true     &&
-	 jsonArr.length          >= 1        &&
+	 Array.isArray(jsonArr) &&
+	 jsonArr.length >= 1    &&
 	 jsonArr.every
-	 ( 
-		library => Object.hasOwn(library, 'name') && 
-		Object.hasOwn(library, 'bibIDs') &&
-		typeof library.bibIDs 	=== 'object' &&
-		Array.isArray(library.bibIDs) === true
+	 (
+		library => typeof library?.name === 'string' && library.name.trim() &&
+		Array.isArray(library.bibIDs)
 	 )
 	);
  }
@@ -892,126 +1371,20 @@ function isValidResJson(jsonObj) {
   );
 }
 
-
-
-
-function loadPrevParams()
-{
-        const prevSearchParams = JSON.parse(localStorage.getItem(PREV_SEARCH_PARAMS));
-        if(!prevSearchParams)
-        {
-            return;
-        }
-
-        const  {query, pagesStart, pagesEnd, yearsStart, yearsEnd, libBuilder, bibID} 
-        = prevSearchParams;
-           
-
-        const queryWords = query.split(', ');
-
-        const isMultipleQs = queryWords.length > 1;
-        if(isMultipleQs)
-        {
-            multipleQueriesChBx.checked = true;
-            multipleQueriesChBx.dispatchEvent(new Event('change'));
-        }
-        
-
-        fillSpBoxBox(querySpBoxes,queryWords),
-
-
-    
-        pagesStartInput.value = pagesStart,
-        pagesEndInput.value = pagesEnd,
-        yearsStartSele.value = yearsStart,
-        yearsEndSele.value = yearsEnd,
-        bibIDInput.value = bibID ?? '';
-        buildLibChBx.checked = libBuilder;
-
-
-}
-
-
-
-function refreshSavedLibs(libToSelect = null)
-{
-
-	librarySele.innerHTML = ''
-	const librariesNames = getLibrariesArray()?.map( library => library.name );
- 
-	librariesNames?.forEach ( ( libraryName ) => 
-    {
-
-         const select = (libraryName === libToSelect);
-         createOptionForSelect(librarySele, libraryName, select);
-
-    });
-        
-}
-
-async function refreshSavedTitles({ titleSlctName = "", titleSlctIndx = -1 } = {})
-
-{
-	savedResultsSele.innerHTML = '';
-	
-    const allResults = await screenerDB.getAllSavedResults();
-    const allTitles = allResults.sort( (resultA,resultB) => {
-
-        const dateA = resultA.meta.date;
-        const dateB = resultB.meta.date;
-
-        if (dateB < dateA) return -1;
-        if (dateB > dateA) return 1;  
-        return 0;                      
-
-    }).map(result => result.meta.title);
-
-	allTitles.forEach ( (title,index) => createOptionForSelect(savedResultsSele,title,
-        (title === titleSlctName || index === titleSlctIndx)
-    ));
-
-}
-
-function createOptionForSelect(selectElement, optionText, selected = false, optionValue = optionText)
-{
-  const optionElement = document.createElement("option");
-  const initValue = selectElement.value;
-  
-  optionElement.value = optionValue;
-  optionElement.textContent = optionText;
-  selectElement.appendChild(optionElement);
-  
-  selectElement.value = selected || !initValue ? optionValue : initValue;
- 
-}
-
-
-function getLibrariesArray(key = LIB_STOR_KEY)
-{
-   
-    const libData = JSON.parse(localStorage.getItem(key))
-	return libData;
-	
-}
-function saveLibrariesArray(libArr, key = LIB_STOR_KEY)
-{
-	localStorage.setItem(key,JSON.stringify(libArr));
-	
-}
+/***********************************************
+ *               FILTER BOXES                  *
+ ***********************************************/
 
 function getSpBoxesValArr(boxesContainer)
 {
 	return Array.from( boxesContainer.querySelectorAll('input') ).map( box => box.value.trim() ).filter( boxValue => boxValue);
 }
 
-function setSpBox(boxesContainer, maxBoxes = Infinity) 
+function setSpBox(boxesContainer, maxBoxes = Infinity)
 {
-
- 
     if(boxesContainer.dataset.spBoxed === "true")
     {
         resetSpBox(boxesContainer);
-        
     }
 
     boxesContainer.dataset.spBoxed = "true";
@@ -1019,7 +1392,7 @@ function setSpBox(boxesContainer, maxBoxes = Infinity)
     const boxes = Array.from( boxesContainer.querySelectorAll("input") );
     for (const box of boxes)
     {
-          box.addEventListener('input', (event) => processBox(box, maxBoxes));
+          box.addEventListener('input', () => processBox(box, maxBoxes));
     }
 
     const lastBox = boxes.pop();
@@ -1027,7 +1400,6 @@ function setSpBox(boxesContainer, maxBoxes = Infinity)
 
     function processBox(box, maxBoxes)
     {
-
         const boxes = Array.from( boxesContainer.querySelectorAll("input") );
         const boxesNum = boxes.length;
         const boxIndex = boxes.indexOf(box);
@@ -1038,25 +1410,20 @@ function setSpBox(boxesContainer, maxBoxes = Infinity)
 
         if (!box.value && (!isFirstBox || !onlyBox) && !isLastBox)
 		{
-
             boxes[boxIndex].remove();
-            
-        } 
+        }
         else if(box.value && isLastBox && boxesNum < maxBoxes)
         {
             const newBox = box.cloneNode();
             newBox.value = '';
             boxesContainer.appendChild(newBox);
-            newBox.addEventListener('input', (event) => processBox(newBox, maxBoxes));
+            newBox.addEventListener('input', () => processBox(newBox, maxBoxes));
         }
     }
-
-
 }
 
 function resetSpBox(boxesContainer, keepMainBoxVal = true)
 {
-
 	const boxes = Array.from( boxesContainer.querySelectorAll("input") );
 	const mainBox = boxes.shift();
     boxes.forEach(box => box.remove());
@@ -1064,27 +1431,6 @@ function resetSpBox(boxesContainer, keepMainBoxVal = true)
 	if(!keepMainBoxVal)
 	{
 	    mainBox.value = '';
-	}
-
-	
-}
-
-function unSetSpBox(boxesContainer, keepMainBoxVal = true)
-{
-    boxesContainer.dataset.spBoxed = "false";
-
-    const boxes = Array.from( boxesContainer.querySelectorAll("input") );
-	const mainBox = boxes.shift();
-    const mainBoxVal = mainBox.value;
-
-    const mainBoxClone = mainBox.cloneNode();
-
-    boxesContainer.replaceChild(mainBoxClone, mainBox);
-    boxes.forEach(box => box.remove());
-
-	if(keepMainBoxVal)
-	{
-	    mainBoxClone.value = mainBoxVal;
 	}
 }
 
@@ -1096,7 +1442,6 @@ function fillSpBoxBox(boxContainer, statements)
            lastBox.value = statement;
            lastBox.dispatchEvent(new Event('input'));
        }
-
 }
 
 function eligibleTitle(title, filterPhrases) {
@@ -1106,25 +1451,24 @@ function eligibleTitle(title, filterPhrases) {
   );
 }
 
+/***********************************************
+ *               RESULTS                       *
+ ***********************************************/
 
 function setResItemForRender(result)
 {
 	const trimToThreeWords = str => str.split(/\s+/).slice(0, 3).join(" ");
 
-	const bibID         = result.bibID;
-	const title         = result.title;
-	const publishYear   = result.publishYear;
-	const pages 	    = result.pages;
-    const totalPagesNum = result.totalPagesNum;
-    const summary = result.summary;
+	const title = result.title;
+	const pages = result.pages;
 
 	const item =
 	{
 		title:  ((title.charAt(title.length - 1) === '/')  ? title.slice(0, -1) : title ).trim(),
-		publishYear:publishYear,
+		publishYear: result.publishYear,
 		searchUrl: `${urler.get('SEARCH')}${result.bibID}`,
 		browseUrl: `${urler.get('BROWSE')}${result.bibID}`,
-		pages: pages ? Array.from(pages.entries()).map( ([pageNumber,pageContents]) => 
+		pages: pages ? Array.from(pages.entries()).map( ([pageNumber,pageContents]) =>
 		{
 			const qText = trimToThreeWords(pageContents[0]);
             const urlIsSrch = ( pageNumber > MAX_PREV_PAGES );
@@ -1132,59 +1476,51 @@ function setResItemForRender(result)
                ? `${urler.get('SEARCH')}${result.bibID}&pageNo=${pageNumber}&qText=${qText}`
                : `${urler.get('BROWSE')}${result.bibID}&PageNo=${pageNumber}`;
 			return {pageNumber,pageContents,qText,pageUrl};
-			
+
 		}) : [],
-        totalPagesNum,
-		bibID,
-        summary
-
+        totalPagesNum: result.totalPagesNum,
+		bibID: result.bibID,
+        summary: result.summary
 	};
-	
-	renderResultItem(item);
 
-	
+	renderResultItem(item);
 }
 
 function getResultItems()
 {
     const resultItems = [];
-    const domItems = document.querySelectorAll('.result-item');
-    for (const domItem of domItems)
+    for (const domItem of screenerResGrp.querySelectorAll('.result-item'))
     {
-        const summary = domItem.getAttribute("summary");
-     
+        const summary = summaryMap.get(domItem) ?? '';
         const title = domItem.querySelector('.result-title').textContent.trim();
         const publishYear = domItem.querySelector('.result-year').textContent.trim();
         const searchUrl = domItem.querySelector('.res-search-url').href;
         const brosweUrl = domItem.querySelector('.res-browse-url').href;
         const bibID = domItem.querySelector('.res-bib-id').textContent.trim();
         const totalPagesNum = domItem.getAttribute("totalPagesNum");
-        
+
         const pages = [];
-        const domPages = domItem.querySelectorAll('.page-item');
-        for (const domPage of domPages)
+        for (const domPage of domItem.querySelectorAll('.page-item'))
         {
              const pageNumber = domPage.querySelector(".page-number").textContent.trim();
              const pageUrl = domPage.querySelector(".page-urls > a").href;
-
-             const pageContents = [];
-             const domPgContents = domPage.querySelectorAll(".page-content");
-             for(const domPgContent of domPgContents)
-             {
-                 const pageContent = domPgContent.textContent.trim();
-                 pageContents.push(pageContent);
-             }
-
-             const page = { pageNumber, pageUrl, pageContents};
-             pages.push(page);
+             const pageContents = Array.from(domPage.querySelectorAll(".page-content"), el => el.textContent.trim());
+             pages.push({ pageNumber, pageUrl, pageContents });
         }
 
-        const item = {title, publishYear, searchUrl, brosweUrl, bibID, pages, summary, totalPagesNum};
-        resultItems.push(item);
-
+        resultItems.push({title, publishYear, searchUrl, brosweUrl, bibID, pages, summary, totalPagesNum});
     }
 
     return resultItems;
+}
+
+function actionEl(tag, className, iconName, label)
+{
+    const el = document.createElement(tag);
+    el.className = `res-action ${className}`;
+    el.innerHTML = `<svg class="ico"><use href="#i-${iconName}"/></svg>`;
+    el.append(label);
+    return el;
 }
 
 function renderResultItem(item)
@@ -1193,45 +1529,46 @@ function renderResultItem(item)
 	{
 		screenerResCntr.classList.remove('hidden');
 	}
-	
+
+    const selectable = mode === 'builder';
+
 	const resultContainer = document.createElement('div'),
-    resultLockBtn = document.createElement('button'),
-    resultRemovBtn = document.createElement('button'),
+    resultHead = document.createElement('div'),
 	resultMeta = document.createElement('div'),
 	resultTitle = document.createElement('div'),
-	resultYear = document.createElement('div'), 
+    resultFacts = document.createElement('div'),
+	resultYear = document.createElement('span'),
+    resultSize = document.createElement('span'),
+    resultBibID = document.createElement('span'),
 	resultUrlsContainer = document.createElement('div'),
-    resSearchUrl = document.createElement('a'),
-	resBrowseUrl = document.createElement('a'),
-    resultBibID = document.createElement('div'), 
-    resultDownImgsBtn = document.createElement('button'), 
-    resCopyDesigBtn = document.createElement('button'), 
+    resSearchUrl = actionEl('a', 'res-search-url', 'text', 'Search transcript'),
+	resBrowseUrl = actionEl('a', 'res-browse-url', 'external', 'Browse thesis'),
+    resultDownImgsBtn = actionEl('button', 'res-down-imgs-btn', 'image', 'Export images'),
+    resCopyDesigBtn = actionEl('button', 'res-get-desig-btn', 'copy', 'Copy folder name'),
 	resPagesContainer = document.createElement('div');
 
-    resultContainer.className = 'result-item',
-    resultLockBtn.className = 'res-lock-btn';
-    resultRemovBtn.className = 'res-remove-btn',
-	resultMeta.className = 'result-meta',
-	resultTitle.className = 'result-title',
-	resultYear.className = 'result-year',
-	resultUrlsContainer.className = 'result-urls',
-	resBrowseUrl.className = 'res-browse-url', 
-	resSearchUrl.className = 'res-search-url',
-    resultBibID.className = 'res-bib-id',
-    resultDownImgsBtn.className = 'res-down-imgs-btn',
-    resCopyDesigBtn.className = 'res-get-desig-btn',
+    resultContainer.className = 'result-item';
+    resultHead.className = 'result-head';
+	resultMeta.className = 'result-meta';
+	resultTitle.className = 'result-title';
+    resultFacts.className = 'result-facts';
+	resultYear.className = 'result-year';
+    resultSize.className = 'result-size';
+	resultUrlsContainer.className = 'result-urls';
+    resultBibID.className = 'res-bib-id';
 	resPagesContainer.className = 'result-pages';
-	
+
+    resultContainer.dataset.bibId = item.bibID;
+
 	resultTitle.innerText = item.title;
-	resultYear.innerText = item.publishYear;	
-	
+	resultYear.innerText = item.publishYear;
+    resultSize.innerText = item.totalPagesNum || '';
+    resultBibID.innerText = item.bibID;
+
 	resSearchUrl.href = item.searchUrl;
     resBrowseUrl.href = item.browseUrl;
-	
 	resSearchUrl.setAttribute('target', '_blank');
 	resBrowseUrl.setAttribute('target', '_blank');
-
-    resultBibID.innerText = item.bibID;
 
     if(item.summary)
     {
@@ -1239,62 +1576,52 @@ function renderResultItem(item)
     }
 
     resultContainer.setAttribute("totalPagesNum", item.totalPagesNum);
-  
-    setScraperCallBack(resSearchUrl, {bibID: item.bibID, title: item.title, publishYear: item.publishYear, 
+
+    setScraperCallBack(resSearchUrl, {bibID: item.bibID, title: item.title, publishYear: item.publishYear,
             totalPagesNum: item.totalPagesNum});
 
-
-    resultLockBtn.addEventListener('click', async(event) => {
-  
-        const locked = resultContainer.classList.contains("locked");
-        if(locked)
-        {
-            resultLockBtn.classList.remove("locked");
-            resultContainer.classList.remove("locked");
-
-        }
-        else
-        {
-            resultLockBtn.classList.add("locked");
-            resultContainer.classList.add("locked");
-        }
-
-      
-        
-    });
-    resultRemovBtn.addEventListener('click', async(event) => {
-      
-
-        const locked = resultContainer.classList.contains("locked");
-        if(!locked)
-        {
-            summaryMap.delete(resultContainer);
-            resultContainer.remove();
-            resultItmsNumLog.innerText = Number(resultItmsNumLog.innerText) - 1;
-            visResultItmsNumLog.innerText = Number(visResultItmsNumLog.innerText) - 1;
-        }
-
-    });
-
     resultDownImgsBtn.addEventListener('click', async() => {
-         const zipFileName = item.bibID;
          const blobObjsArr = await getPrevImgBlobObjs(item.bibID);
          const dataStreamsArr = blobObjsArr.map(blobObj => ({fileName: `Page_${blobObj.pageNumber}` , fileContent:blobObj.blob}));
-         downloadGIFZIP(dataStreamsArr,zipFileName);
-
+         downloadGIFZIP(dataStreamsArr, item.bibID);
     });
 
-    resCopyDesigBtn.addEventListener('click', async() => {
+    resCopyDesigBtn.addEventListener('click', () => {
         const trimmedTitle = item.title.split(' ').slice(0,FOLDER_DESIG_WORDS_LEN).join(' ');
-        const folderDesig = `${trimmedTitle} ${item.publishYear} [${item.bibID}]`;
-        copyTextToClipboard(folderDesig);
+        copyTextToClipboard(`${trimmedTitle} ${item.publishYear} [${item.bibID}]`);
+        notify('Folder name copied.');
     });
-	
-	resultMeta.append(resultTitle,resultYear);
-	resultUrlsContainer.append(resSearchUrl,resBrowseUrl,resultDownImgsBtn,resCopyDesigBtn);
-	
-	resultContainer.append(resultLockBtn,resultRemovBtn,resultMeta,resultUrlsContainer, resultBibID);
 
+    if (selectable)
+    {
+        const checkLabel = document.createElement('label');
+        checkLabel.className = 'res-check';
+        const checkBox = document.createElement('input');
+        checkBox.type = 'checkbox';
+        checkBox.setAttribute('aria-label', `Keep "${item.title}"`);
+        checkBox.addEventListener('change', () => {
+            resultContainer.classList.toggle('checked', checkBox.checked);
+            updateSelectionUI();
+        });
+        checkLabel.append(checkBox);
+        resultHead.append(checkLabel);
+    }
+
+	resultFacts.append(resultYear, resultSize, resultBibID);
+	resultMeta.append(resultTitle, resultFacts);
+	resultUrlsContainer.append(resSearchUrl,resBrowseUrl,resultDownImgsBtn,resCopyDesigBtn);
+    resultHead.append(resultMeta);
+
+	resultContainer.append(resultHead, resultUrlsContainer);
+
+    if (selectable && item.summary)
+    {
+        const summaryEle = document.createElement('div');
+        summaryEle.className = 'res-summary';
+        summaryEle.innerText = item.summary;
+        resPagesContainer.append(summaryEle);
+        resultContainer.classList.add('has-summary');
+    }
 
 	for (const page of item.pages)
 	{
@@ -1306,22 +1633,21 @@ function renderResultItem(item)
 	   pageUrlsContainer = document.createElement('div'),
 	   pageUrl = document.createElement('a'),
 	   pageContentsContainer = document.createElement('div');
-	   
-	   pageContainer.className = 'page-item',
-	   pageHeader.className = 'page-header',
-	   pageNumber.className = 'page-number',
-	   pageUrlsContainer.className = 'page-urls',
-	   pageUrl.className = urlIsSrch ? 'page-search-url' : 'page-browse-url',
+
+	   pageContainer.className = 'page-item';
+	   pageHeader.className = 'page-header';
+	   pageNumber.className = 'page-number';
+	   pageUrlsContainer.className = 'page-urls';
+	   pageUrl.className = urlIsSrch ? 'page-search-url' : 'page-browse-url';
 	   pageContentsContainer.className = 'page-contents';
-	   
+
 	   pageNumber.innerText = page.pageNumber;
-	   
+
 	   pageUrl.href = page.pageUrl;
 	   pageUrl.setAttribute('target', '_blank');
-	   
+
 	   if(urlIsSrch)
 	   {
-
         const query = function (){
          if (page.pageNumber > 100) {
                  const firstText = page.pageContents[0];
@@ -1332,29 +1658,26 @@ function renderResultItem(item)
              }
          }();
 
-         setScraperCallBack(pageUrl, { bibID: item.bibID, title: item.title, publishYear: item.publishYear, 
+         setScraperCallBack(pageUrl, { bibID: item.bibID, title: item.title, publishYear: item.publishYear,
             totalPagesNum: item.totalPagesNum, pageNumber: page.pageNumber, defQuery: query } );
 	   }
 	   pageUrlsContainer.append(pageUrl);
 	   pageHeader.append(pageNumber,pageUrlsContainer);
 	   pageContainer.append(pageHeader);
-	   
-	   
+
 	   for(const pageContent of page.pageContents)
 	   {
 		   const pageContentEle = document.createElement('div');
-		   
 		   pageContentEle.className = 'page-content';
 		   pageContentEle.innerText = pageContent;
-		   
 		   pageContentsContainer.append(pageContentEle);
-		   
 	   }
-	   
+
 	   pageContainer.append(pageContentsContainer);
 	   resPagesContainer.append(pageContainer);
-	   
 	}
+
+    if (item.pages.length) resultContainer.classList.add('has-pages');
 
     resultContainer.append(resPagesContainer);
 	screenerResGrp.append(resultContainer);
@@ -1364,8 +1687,6 @@ function renderResultItem(item)
 
 function accordionize(accordEle, contentEle, groupStr) {
 
-    accordEle.style.cursor = "pointer";
-
     contentEle.style.height = "0px";
     contentEle.style.overflow = "hidden";
     contentEle.style.transition = "height 0.3s ease";
@@ -1373,36 +1694,28 @@ function accordionize(accordEle, contentEle, groupStr) {
     contentEle.classList.add('accordion-panel', groupStr);
 
     accordEle.addEventListener('click', (event) => {
-     if (event.target === contentEle || contentEle.contains(event.target) || 
-          event.target.tagName === 'BUTTON' || event.target.tagName === 'A') 
-     {
-        return;
-     }
+        if (contentEle.contains(event.target) || event.target.closest('button, a, input, label, select')) {
+            return;
+        }
+        if (!contentEle.childElementCount) return;
 
         const otherAccords = Array.from(document.querySelectorAll(`.${groupStr}`)).filter((ele) => ele !== contentEle);
-        otherAccords.forEach((otherAccord) => { otherAccord.style.height = "0px"; } );
-        if (contentEle.style.height === "0px") {
-            contentEle.style.height = contentEle.scrollHeight + "px";
-        } else {
-            contentEle.style.height = "0px";
-        }
+        otherAccords.forEach((otherAccord) => {
+            otherAccord.style.height = "0px";
+            otherAccord.closest('.result-item')?.classList.remove('open');
+        });
+        const opening = contentEle.style.height === "0px";
+        contentEle.style.height = opening ? contentEle.scrollHeight + "px" : "0px";
+        accordEle.classList.toggle('open', opening);
     });
 }
 
 
 function setScraperCallBack(pageUrlEle, args)
 {
-	function patchUrlEle(event,args)
-	{
+	pageUrlEle.onclick = (event) => {
 		event.stopPropagation();
 		event.preventDefault();
 		scraperCallback(args);
-	
-	}
-	
-	pageUrlEle.onclick = (event) => patchUrlEle(event,args);
-	
+	};
 }
-
-
-

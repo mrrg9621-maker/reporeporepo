@@ -159,6 +159,17 @@ export class Progress
 		
 	}
 
+    setTotal(totalItems)
+    {
+        this.totalItems = totalItems;
+        if (!totalItems) {
+            this.progressBarEle.style.width = '100%';
+            this.progressStatusEle.textContent = 'Nothing to process';
+            return;
+        }
+        this.progress(0);
+    }
+
     resetBar()
     {
          const progressBarEle = this.progressBarEle;
@@ -659,6 +670,28 @@ export function getTextWithLineBreaks(el) {
 /***********************************************
  *               MISC                          *
  ***********************************************/
+
+/* Short, non-blocking feedback in the corner of the window. */
+export function notify(message, kind = 'info', timeout = 3600)
+{
+    let host = document.getElementById('toastHost');
+    if (!host) {
+        host = document.createElement('div');
+        host.id = 'toastHost';
+        host.className = 'toast-host';
+        host.setAttribute('role', 'status');
+        host.setAttribute('aria-live', 'polite');
+        document.body.append(host);
+    }
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${kind}`;
+    toast.textContent = message;
+    host.append(toast);
+    setTimeout(() => {
+        toast.classList.add('leaving');
+        setTimeout(() => toast.remove(), 250);
+    }, timeout);
+}
 
 export function copyTextToClipboard(text) {
     const textarea = document.createElement("textarea");
