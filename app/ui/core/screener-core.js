@@ -12,7 +12,7 @@ import {
     getTextWithLineBreaks
 }
 from '../utils/utils.js';
-import { URL_PROTOCOL, URL_SUBDOMAINS, URL_BASES, MAX_PREV_PAGES } from '../configs/configs.js';
+import { URL_PROTOCOL, URL_SUBDOMAINS, URL_BASES, MAX_PREV_PAGES, MIN_YEAR } from '../configs/configs.js';
 import { search } from './search.js';
 
 /***********************************************
@@ -22,6 +22,12 @@ const urler = new URLER(URL_PROTOCOL, URL_SUBDOMAINS, URL_BASES);
 const CATALOGUE_CONCURRENCY = 2;
 const CATALOGUE_TIMEOUT_MS = 180000;
 const CATALOGUE_ATTEMPTS = 2;
+const CATALOGUE_PROBE_SIZE = 10;            // rows in a counting request
+const CATALOGUE_PROBE_TIMEOUT_MS = 90000;
+const CATALOGUE_CHUNK = 400;                // most matches fetched in one request
+const CATALOGUE_CONFIRM_ABOVE = 2000;       // ask before collecting more theses than this
+const CATALOGUE_MAX_BIBID = 99999999;
+const CATALOGUE_UNKNOWN_PAGE_SIZE = 100000000;
 
 /***********************************************
  *               GLOBALS                       *
@@ -98,33 +104,48 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
         ? (years.start && years.end && years.start !== years.end ? `${years.start}-${years.end}` : (years.start || years.end))
         : '';
 
-    // Catalogue requests are slow on EULC's side (a broad title query can take
-    // well over a minute), so only CATALOGUE_CONCURRENCY run at once, each with
-    // a long time limit and one retry. Any request that still fails stops the
-    // search: a missing set would make the combined result wrong.
+    // EULC renders every match of a search into one page, and a broad search
+    // (tens of thousands of theses) never finishes. So each request is first
+    // counted with a 10-row page (fast), and any search with more than
+    // CATALOGUE_CHUNK matches is split by publication year, then by BibID
+    // range, until every part is small enough to fetch whole. At most
+    // CATALOGUE_CONCURRENCY requests run at once, each with one retry; any
+    // request that still fails stops the search, since a missing part would
+    // make the result wrong.
     const signal = operationSignal();
     const plans = planCatalogueRequests(queries);
-    let finishedRequests = 0;
-    const reportRequests = () => progressObj?.status(plans.length === 1
-        ? 'Searching the EULC catalogue…'
-        : `Catalogue requests: ${finishedRequests} of ${plans.length} done…`);
-    reportRequests();
+    const gate = createGate(CATALOGUE_CONCURRENCY, signal);
+    let requestsDone = 0;
+    const status = (text) => progressObj?.status(text);
 
-    async function runRequest(plan)
+    const userYears = years.start || years.end
+        ? [Number(years.start) || MIN_YEAR, Number(years.end) || new Date().getFullYear()]
+        : null;
+    const bibMatch = String(eulc.bibRange || '').trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    const userBibs = bibMatch ? [Number(bibMatch[1]), Number(bibMatch[2] ?? bibMatch[1])] : null;
+    const canSplitBibs = !eulc.bibRange || Boolean(bibMatch);
+
+    const rangeParam = (range) => range ? (range[0] === range[1] ? String(range[0]) : `${range[0]}-${range[1]}`) : '';
+
+    async function request(plan, yearRange, bibRange, pageSize, timeout)
     {
         const url = urler.get('LIBRARY', {
             ...eulc,
             slots: plan.slots.map(q => ({ text: q.text, field: q.field || field })),
             ops: plan.ops,
-            years: yearParam
+            years: yearRange ? rangeParam(yearRange) : yearParam,
+            bibRange: bibRange ? rangeParam(bibRange) : (eulc.bibRange || ''),
+            pageSize
         });
         let lastError;
         for (let attempt = 1; attempt <= CATALOGUE_ATTEMPTS; attempt++)
         {
             try
             {
-                const response = await eulcFetch(url, { timeout: CATALOGUE_TIMEOUT_MS, signal });
-                return parseCatalogue(await response.text());
+                const response = await gate(() => eulcFetch(url, { timeout, signal }));
+                const html = await response.text();
+                requestsDone++;
+                return html;
             }
             catch (error)
             {
@@ -132,28 +153,77 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
                 lastError = error;
                 const retryable = !error.status || error.status === 502 || error.status === 503 || error.status === 504;
                 if (!retryable) break;
-                console.warn(`Catalogue request failed (attempt ${attempt} of ${CATALOGUE_ATTEMPTS})`, plan, error);
+                console.warn(`Catalogue request failed (attempt ${attempt} of ${CATALOGUE_ATTEMPTS})`, url, error);
             }
         }
-        throw lastError;
+        const terms = plan.slots.map(q => `"${q.text}"`).join(', ');
+        const part = [yearRange && `years ${rangeParam(yearRange)}`, bibRange && `BibIDs ${rangeParam(bibRange)}`].filter(Boolean).join(', ');
+        throw new Error(`The catalogue search for ${terms}${part ? ` (${part})` : ''} failed after ${CATALOGUE_ATTEMPTS} attempts. ${lastError.message}`, { cause: lastError });
     }
 
-    const results = await mapLimit(plans, CATALOGUE_CONCURRENCY, async (plan) => {
-        try
-        {
-            return { plan, found: await runRequest(plan) };
+    // Count, and split until each part has at most CATALOGUE_CHUNK matches.
+    // Parts come back in year/BibID order.
+    async function explore(plan, yearRange, bibRange)
+    {
+        status(`Counting catalogue matches… (${requestsDone} requests so far)`);
+        const html = await request(plan, yearRange, bibRange, CATALOGUE_PROBE_SIZE, CATALOGUE_PROBE_TIMEOUT_MS);
+        const count = parseCatalogueCount(html);
+        if (count === 0) return [];
+        if (count !== null && count <= CATALOGUE_PROBE_SIZE) return [{ plan, yearRange, bibRange, count, html }];
+        if (count === null || count <= CATALOGUE_CHUNK) return [{ plan, yearRange, bibRange, count }];
+
+        const years = yearRange ?? [MIN_YEAR, new Date().getFullYear()];
+        if (years[0] < years[1]) {
+            const mid = Math.floor((years[0] + years[1]) / 2);
+            const halves = await Promise.all([explore(plan, [years[0], mid], bibRange), explore(plan, [mid + 1, years[1]], bibRange)]);
+            return halves.flat();
         }
-        catch (error)
-        {
-            if (signal.aborted) throw error;
-            const terms = plan.slots.map(q => `"${q.text}"`).join(', ');
-            throw new Error(`The catalogue search for ${terms} failed after ${CATALOGUE_ATTEMPTS} attempts. ${error.message}`, { cause: error });
+        const bibs = bibRange ?? userBibs ?? [1, CATALOGUE_MAX_BIBID];
+        if (canSplitBibs && bibs[0] < bibs[1]) {
+            // BibIDs span millions and cluster, so split 8 ways to get there in few rounds
+            const step = Math.ceil((bibs[1] - bibs[0] + 1) / 8);
+            const slices = [];
+            for (let lo = bibs[0]; lo <= bibs[1]; lo += step) slices.push([lo, Math.min(lo + step - 1, bibs[1])]);
+            const parts = await Promise.all(slices.map(slice => explore(plan, years, slice)));
+            return parts.flat();
         }
-        finally
-        {
-            finishedRequests++;
-            reportRequests();
+        return [{ plan, yearRange: years, bibRange, count }];
+    }
+
+    const partsByPlan = await Promise.all(plans.map(plan => explore(plan, userYears, null)));
+    const parts = partsByPlan.flat();
+    const total = parts.reduce((sum, part) => sum + (part.count ?? 0), 0);
+
+    if (total > CATALOGUE_CONFIRM_ABOVE && !confirm(
+        `EULC reports about ${total.toLocaleString()} matching theses for these queries.\n\n` +
+        `Each one needs its own catalogue-details request, so this can take a long time. ` +
+        `Narrow the queries or years to make it faster.\n\nContinue anyway?`)) {
+        throw new DOMException('Cancelled by the user', 'AbortError');
+    }
+
+    // Fetch every part whose rows are not already in hand
+    const toFetch = parts.filter(part => !part.html);
+    let fetched = 0;
+    const reportFetch = () => status(toFetch.length
+        ? `Fetching catalogue results: part ${fetched} of ${toFetch.length} done (≈${total.toLocaleString()} theses)…`
+        : 'Reading catalogue results…');
+    reportFetch();
+    await Promise.all(toFetch.map(async (part) => {
+        part.html = await request(part.plan, part.yearRange, part.bibRange,
+            part.count === null ? CATALOGUE_UNKNOWN_PAGE_SIZE : part.count + CATALOGUE_PROBE_SIZE, CATALOGUE_TIMEOUT_MS);
+        fetched++;
+        reportFetch();
+    }));
+
+    const results = plans.map((plan, index) => {
+        const seen = new Set();
+        const found = [];
+        for (const part of partsByPlan[index]) {
+            for (const item of parseCatalogue(part.html)) {
+                if (!seen.has(item.bibID)) { seen.add(item.bibID); found.push(item); }
+            }
         }
+        return { plan, found };
     });
 
     const candidates = combineCatalogueResults(results);
@@ -212,7 +282,7 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
     }));
 
     throwIfStopped(signal);
-    return { resultNum, requests: plans.length };
+    return { resultNum, requests: requestsDone };
 }
 
 function parseCatalogue(html)
@@ -230,20 +300,29 @@ function parseCatalogue(html)
     return found;
 }
 
-/* Promise.all with at most `limit` workers in flight; results keep input order. */
-async function mapLimit(items, limit, worker)
+/* "تم العثور علي : 2481" on every result page; null when absent. */
+function parseCatalogueCount(html)
 {
-    const results = new Array(items.length);
-    let next = 0;
-    const run = async () => {
-        while (next < items.length) {
-            const index = next++;
-            results[index] = await worker(items[index], index);
+    const match = html.match(/تم العثور علي\s*:\s*([\d,]+)/);
+    return match ? Number(match[1].replace(/,/g, '')) : null;
+}
+
+/* Runs at most `limit` tasks at once; queued tasks are dropped on Stop. */
+function createGate(limit, signal)
+{
+    let active = 0;
+    const queue = [];
+    const next = () => {
+        while (active < limit && queue.length) {
+            const { task, resolve, reject } = queue.shift();
+            if (signal.aborted) { reject(signal.reason); continue; }
+            active++;
+            task().then(resolve, reject).finally(() => { active--; next(); });
         }
     };
-    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
-    return results;
+    return (task) => new Promise((resolve, reject) => { queue.push({ task, resolve, reject }); next(); });
 }
+
 export async function getBibs(bibIDs, queries, startYear, endYear, startPage, endPage, _progressObj, renderCb)
 {
     progressObj = _progressObj;
