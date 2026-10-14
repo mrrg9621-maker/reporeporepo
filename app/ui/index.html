@@ -31,6 +31,7 @@
       <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
       <symbol id="i-open" viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></symbol>
       <symbol id="i-restore" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2.5"/></symbol>
       <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
       <symbol id="i-check-all" viewBox="0 0 24 24"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></symbol>
       <symbol id="i-square" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></symbol>
@@ -127,6 +128,7 @@
 
         <div class="search-action">
           <button class="btn btn-primary btn-lg" id="searchButton"><svg class="ico"><use href="#i-search"/></svg><span id="searchButtonLabel">Search theses</span></button>
+          <button class="btn btn-stop btn-lg" id="stopButton" disabled title="Stop every running EULC request"><svg class="ico"><use href="#i-stop"/></svg>Stop</button>
           <div class="progress-container" aria-label="Search progress"><div class="progress-bar" id="progressBar"></div><span class="progress-status" id="progressStatus"></span></div>
         </div>
       </section>
@@ -137,9 +139,10 @@
         <div class="panel-heading"><div class="panel-title"><h2 id="resultsHeading">Matching theses</h2></div><div class="result-totals"><span class="result-count" id="resultItmsNumLog"></span><span class="visible-result-count" id="visResultItmsNumLog"></span><span class="checked-count" id="checkedNumLog"></span></div></div>
         <div class="filter-grid"><div><span class="field-label" id="titleFilterLabel">Filter titles</span><div id="titleFiltSpBoxes" class="filter-boxes"><input aria-labelledby="titleFilterLabel" type="text" placeholder="Include words, or -word to exclude" aria-label="Title filter"></div></div><div><span class="field-label" id="contentFilterLabel">Filter content</span><div id="contentFiltSpBoxes" class="filter-boxes"><input aria-labelledby="contentFilterLabel" type="text" placeholder="Words in the pages or abstract" aria-label="Content filter"></div></div></div>
         <div id="screenerBatchBar" class="action-bar" data-mode-section="search">
-          <button id="scrapAllBtn" class="btn btn-soft"><svg class="ico"><use href="#i-layers"/></svg>Collect all transcripts</button>
-          <button id="downloadAllBtn" class="btn btn-soft"><svg class="ico"><use href="#i-download"/></svg>Export all transcripts</button>
-          <span class="bar-note">Works on the visible results.</span>
+          <button id="scrapAllBtn" class="btn btn-soft" title="Fetch the full transcript of every visible thesis and keep it on this computer"><svg class="ico"><use href="#i-layers"/></svg>Collect transcripts</button>
+          <button id="downloadAllBtn" class="btn btn-soft" title="One PDF per collected thesis, packed in a ZIP"><svg class="ico"><use href="#i-download"/></svg>Export PDFs (ZIP)</button>
+          <button id="exportJsonBtn" class="btn btn-soft" title="All collected transcripts in one JSON file"><svg class="ico"><use href="#i-files"/></svg>Export JSON</button>
+          <span class="bar-note" id="batchNote"></span>
         </div>
         <div id="builderSelectBar" class="action-bar" data-mode-section="builder">
           <button id="checkVisibleBtn" class="btn btn-soft"><svg class="ico"><use href="#i-check-all"/></svg>Check visible</button>
@@ -153,7 +156,7 @@
   </main>
   <div class="overlay"></div>
   <section class="scraper hidden" id="scraperContainer" role="dialog" aria-modal="true" aria-labelledby="scraperTitle">
-    <header class="scraper-header"><div class="transcript-title-row"><div><span class="eyebrow">THESIS TRANSCRIPT</span><h2 id="scraperTitle"></h2></div><button class="close-button" id="scraperCloseBtn" aria-label="Close transcript">×</button></div><div class="transcript-meta"><span class="scraper-year" id="scraperYear"></span><span class="scraper-bib-id" id="scraperBibID"></span><span class="scraper-total-pg-num" id="scraperTotalPgNm"></span></div></header>
+    <header class="scraper-header"><div class="transcript-title-row"><div><span class="eyebrow">THESIS TRANSCRIPT</span><h2 id="scraperTitle"></h2></div><div class="scraper-header-tools"><button class="btn btn-stop btn-sm" id="scraperStopBtn" disabled title="Stop every running EULC request"><svg class="ico"><use href="#i-stop"/></svg>Stop</button><button class="close-button" id="scraperCloseBtn" aria-label="Close transcript">×</button></div></div><div class="transcript-meta"><span class="scraper-year" id="scraperYear"></span><span class="scraper-bib-id" id="scraperBibID"></span><span class="scraper-total-pg-num" id="scraperTotalPgNm"></span></div></header>
     <div class="scraper-body"><div class="transcript-search"><label class="field-label" for="scraperSrchInput">Search within this thesis</label><div class="flex-row"><input class="scraper-search-box" id="scraperSrchInput" placeholder="Search a word or phrase"><button class="button-base main-button" id="scraperSrchBtn">Search</button></div></div><div class="transcript-tools"><div class="page-range"><label class="field-label" for="scraperPageLInput">Pages</label><div class="range-field"><input class="scraper-page-num" id="scraperPageLInput" aria-label="First thesis page"><span>to</span><input class="scraper-page-num" id="scraperPageRInput" aria-label="Last thesis page"></div></div><button class="scraper-main-btn" id="scraperPageNumBtn">Map page numbers</button><button class="scraper-main-btn" id="scraperGetPgsStartBtn">Find page starts</button><button class="scraper-main-btn" id="scraperScrapAllBtn">Collect transcripts</button></div><div class="transcript-bottom-row"><div class="keyword-field"><label class="field-label" for="scraperKWDropList">Saved keyword</label><select id="scraperKWDropList"><option value="" disabled selected hidden>Select a keyword…</option></select></div><div class="export-tools"><button class="scraper-main-btn" id="scraperOpenWeb">Preview PDF ↗</button><button class="scraper-main-btn" id="scraperDownlJSONBtn">Export JSON</button><button class="scraper-main-btn" id="scraperDownlPDFBtn">Export PDF</button></div></div><div class="progress-container"><div class="progress-bar" id="scraperProgBar"></div><span class="progress-status" id="scraperProgStatus"></span></div></div>
     <div class="scraper-results hidden" id="scraperResCntr"><div class="reader-label">COLLECTED PAGES</div><div class="flex-column" id="scraperResGrp"></div></div>
   </section>

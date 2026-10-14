@@ -1,6 +1,6 @@
 # EULC Screener
 
-Revision: 2026-10-14 (Africa/Cairo). Version 2.2.1.
+Revision: 2026-10-14 (Africa/Cairo). Version 2.3.0.
 
 EULC Screener is an Electron desktop app for screening thesis libraries, searching transcripts, viewing matching pages, and exporting results. Its own local server starts and stops with the desktop app. No separate server or proxy needs to be started. The supplied localhost certificate/key are bundled in `resources/certs/`.
 
@@ -40,7 +40,19 @@ Add rows with **Add term** / **Add query** and remove them with ×. Each row has
 
 ### Search theses
 
-Searches the pages of the library selected in **Libraries**, or of one thesis when a BibID is entered under **Single thesis**. Set the page range and years, then press **Search theses**. Title/content filters narrow the displayed matches. **Collect all transcripts** and **Export all transcripts** work on the visible results.
+Searches the pages of the library selected in **Libraries**, or of one thesis when a BibID is entered under **Single thesis**. Set the page range and years, then press **Search theses**. Title/content filters narrow the displayed matches.
+
+Three buttons work on the visible results:
+
+- **Collect transcripts** fetches the full transcript of each thesis and keeps it on this computer (IndexedDB). Theses already collected are skipped. The progress bar moves page by page and names the thesis being collected.
+- **Export PDFs (ZIP)** writes one PDF per collected thesis into a ZIP.
+- **Export JSON** writes one file: an array of theses, each `{ bibID, title, publishYear, totalPages, collectedAt, missingPages, pages: [{ virtualPage, content }, …] }`.
+
+The export buttons are enabled when at least one visible thesis has a collected transcript, whether it was collected now or earlier (so an opened archive can be exported straight away). Visible theses that are not collected yet are left out of an export, with a notice. The line beside the buttons shows how many visible theses are collected.
+
+### Stop
+
+**Stop** (beside the progress bar, and in the transcript window's header) cancels every running EULC request: searches, library-builder queries, collecting, exports and transcript-window operations. Queued requests are dropped and the local server also cancels its request to EULC. Results found so far stay on screen; a stopped export downloads nothing.
 
 ### Build a library
 

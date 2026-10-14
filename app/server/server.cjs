@@ -33,9 +33,10 @@ async function readBody(req, limit = 2 * 1024 * 1024) {
 function createServer({root = paths.uiRoot, upstreamFetch = globalThis.fetch, tls} = {}) {
   const cookies = new Map();
   let requestNumber = 0;
-  async function upstream(target, method, body, contentType, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  async function upstream(target, method, body, contentType, timeoutMs = DEFAULT_TIMEOUT_MS, cancelSignal) {
     let url = validateTarget(target);
-    const signal = AbortSignal.timeout(timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = cancelSignal ? AbortSignal.any([timeout, cancelSignal]) : timeout;
     for (let redirects = 0; redirects <= 5; redirects++) {
       const headers = {'User-Agent': 'Mozilla/5.0 EULC-Screener/2.0', 'Accept': '*/*'};
       if (contentType) headers['Content-Type'] = contentType;
@@ -56,7 +57,7 @@ function createServer({root = paths.uiRoot, upstreamFetch = globalThis.fetch, tl
     throw new Error('Too many EULC redirects');
   }
   const handler = async (req, res) => {
-    let requestId = '', target = '';
+    let requestId = '', target = '', cancelled = null;
     const fail = (status, message, source = 'local-server') => {
       res.writeHead(status, {'Content-Type':'text/plain; charset=utf-8', 'X-EULC-Error-Source':source, 'Cache-Control':'no-store'});
       res.end(message);
@@ -80,7 +81,11 @@ function createServer({root = paths.uiRoot, upstreamFetch = globalThis.fetch, tl
         const started = Date.now();
         console.info(`[EULC ${requestId}] ${req.method} ${target}`);
         const timeoutMs = requestTimeout(url.searchParams.get('timeout'));
-        const {response, finalUrl} = await upstream(target, req.method, await readBody(req), req.headers['content-type'], timeoutMs);
+        // The app's Stop button aborts its request; stop the upstream one too
+        const clientGone = new AbortController();
+        res.on('close', () => { if (!res.writableFinished) clientGone.abort(); });
+        cancelled = clientGone.signal;
+        const {response, finalUrl} = await upstream(target, req.method, await readBody(req), req.headers['content-type'], timeoutMs, clientGone.signal);
         const body = Buffer.from(await response.arrayBuffer());
         const duration = Date.now() - started;
         const responseHeaders = {
@@ -116,6 +121,10 @@ function createServer({root = paths.uiRoot, upstreamFetch = globalThis.fetch, tl
         details.push(`${cause.code || cause.name || 'Error'}: ${cause.message || String(cause)}`);
       }
       const explanation = details.join(' -> ');
+      if (requestId && cancelled?.aborted) {
+        console.info(`[EULC ${requestId}] cancelled by the app`);
+        return;
+      }
       if (requestId) {
         // Electron's fetch reports our own time limit as "aborted due to timeout" or ABORT_ERR
         const timedOut = /TimeoutError|ETIMEDOUT|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|timeout|ABORT_ERR|AbortError/i.test(explanation);

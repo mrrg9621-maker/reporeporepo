@@ -6,6 +6,8 @@ import {
     arrayFromNUMRange,
     orchestrateFetch,
     eulcFetch,
+    operationSignal,
+    throwIfStopped,
     URLER,
     getTextWithLineBreaks
 }
@@ -25,6 +27,7 @@ const CATALOGUE_ATTEMPTS = 2;
  *               GLOBALS                       *
  ***********************************************/
 let progressObj;
+let searchSignal;
 
 /***********************************************
  *               FUNCTIONS                     *
@@ -62,6 +65,7 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
     // a long time limit and one retry. A failed required query aborts the
     // search (its set would make the result wrong); a failed optional query is
     // skipped and reported.
+    const signal = operationSignal();
     const skipped = [];
     let finishedQueries = 0;
     const reportQueries = () => progressObj?.status(`Catalogue queries: ${finishedQueries} of ${queries.length} done…`);
@@ -75,11 +79,12 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
         {
             try
             {
-                const response = await eulcFetch(url, { timeout: CATALOGUE_TIMEOUT_MS });
+                const response = await eulcFetch(url, { timeout: CATALOGUE_TIMEOUT_MS, signal });
                 return parseCatalogue(await response.text());
             }
             catch (error)
             {
+                if (signal.aborted) throw error;
                 lastError = error;
                 const retryable = !error.status || error.status === 502 || error.status === 503 || error.status === 504;
                 if (!retryable) break;
@@ -96,6 +101,7 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
         }
         catch (error)
         {
+            if (signal.aborted) throw error;
             if (query.must || queries.length === 1) {
                 const wrapped = new Error(`The catalogue query "${query.text}" failed after ${CATALOGUE_ATTEMPTS} attempts. ${error.message}`, { cause: error });
                 throw wrapped;
@@ -144,7 +150,7 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
     await Promise.all(candidates.map(async ({ bibID, title }, index) => {
         try
         {
-            const response = await orchestrateFetch(urler.get('LIB_DETAILS', bibID));
+            const response = await orchestrateFetch(urler.get('LIB_DETAILS', bibID), { signal });
             const detailsTab = new DOMParser().parseFromString(await response.text(), "text/html");
             const rows = detailsTab.querySelectorAll("tr");
 
@@ -165,7 +171,7 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
         }
         catch (error)
         {
-            console.error(`BibID ${bibID}: catalogue record failed`, error);
+            if (!signal.aborted) console.error(`BibID ${bibID}: catalogue record failed`, error);
             settled[index] = null;
         }
         finally
@@ -175,6 +181,7 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
         }
     }));
 
+    throwIfStopped(signal);
     return { resultNum, skipped };
 }
 
@@ -210,6 +217,7 @@ async function mapLimit(items, limit, worker)
 export async function getBibs(bibIDs, queries, startYear, endYear, startPage, endPage, _progressObj, renderCb)
 {
     progressObj = _progressObj;
+    searchSignal = operationSignal();
 
     const arrayProcessor = new ArrayProcessor(getBib, bibIDs, queries, startYear, endYear, startPage, endPage);
 
@@ -219,6 +227,7 @@ export async function getBibs(bibIDs, queries, startYear, endYear, startPage, en
     }
 
     const results = await arrayProcessor.process();
+    throwIfStopped(searchSignal);
     return results.length;
 }
 
@@ -264,6 +273,7 @@ async function getBib(bibID, queries, startYear, endYear, startPage, endPage) {
         }
 
         if (matchedSnippets.size) {
+            throwIfStopped(searchSignal);
             const {
                 title,
                 publishYear,
@@ -291,7 +301,7 @@ async function getBib(bibID, queries, startYear, endYear, startPage, endPage) {
 async function getThesisMeta(bibID) {
     try {
         const url = urler.get('BROWSE') + bibID;
-        const response = await orchestrateFetch( url);
+        const response = await orchestrateFetch(url, { signal: searchSignal });
         if (!response.ok) {
             throw new Error(`HTTP error: ${response.status}`);
         }

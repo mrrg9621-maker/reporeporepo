@@ -39,6 +39,12 @@ button:disabled{opacity:.42;cursor:not-allowed;transform:none!important;box-shad
 .btn-primary-soft:hover:not(:disabled){background:var(--tint-strong);box-shadow:0 3px 10px var(--focus)}
 .btn-soft,.scraper-main-btn,.screener-batch-btn,dialog button,.scraper-btn-container button,#copyErrorBtn{background:var(--surface);color:var(--text);border-color:var(--border)}
 .btn-soft:hover:not(:disabled),.scraper-main-btn:hover:not(:disabled),dialog button:hover,.scraper-btn-container button:hover:not(:disabled){border-color:var(--accent);color:var(--tint-text);box-shadow:0 3px 10px var(--focus)}
+.btn-stop{background:var(--surface);color:var(--danger);border-color:var(--border)}
+.btn-stop .ico{fill:currentColor;stroke:none}
+.btn-stop:hover:not(:disabled){background:var(--danger-bg);border-color:var(--danger);box-shadow:0 3px 10px #c23b5526}
+.btn-stop:not(:disabled){border-color:var(--danger);animation:stop-ready 1.6s ease-in-out infinite}
+@keyframes stop-ready{50%{box-shadow:0 0 0 4px var(--danger-bg)}}
+.scraper-header-tools{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .btn-ghost{background:transparent;color:var(--muted);padding:7px 11px;min-height:34px;font-size:12px}
 .btn-ghost:hover:not(:disabled){background:var(--tint);color:var(--tint-text)}
 .btn-sm{min-height:30px;padding:5px 10px;font-size:12px}

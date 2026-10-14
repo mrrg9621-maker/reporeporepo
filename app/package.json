@@ -1,6 +1,6 @@
 {
   "name": "eulc-screener",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "private": true,
   "description": "Self-contained EULC thesis screening desktop app",
   "main": "desktop/main.cjs",

@@ -3,7 +3,7 @@
  ***********************************************/
 import { SCRAPER_PAGE_MAX_CHAR, MAX_PREV_PAGES, SNIPPET_MAX_WORDS, PAGES_DOWN, PAGES_PREFS } from '../configs/configs.js';
 import { performSearch, performSearches, performScrap, getPagesNumMap, getQueryPrefix } from '../core/scraper-core.js';
-import { downloadJSON, arrayFromNUMRange, Progress } from '../utils/utils.js';
+import { downloadJSON, arrayFromNUMRange, Progress, operationSignal } from '../utils/utils.js';
 
 /***********************************************
  *               Globals                       *
@@ -129,9 +129,11 @@ export function initScraper()
 
 	   progressObj = new Progress(totalTasks,scraperProgBar,scraperProgStatus);
 	   scraperPanelOff();
+	   const signal = operationSignal();
 	   for (const resScrapBtn of resScrapBtns) 
 		{
 			 await new Promise(requestAnimationFrame);
+			 if (signal.aborted) break;
  			 resScrapBtn.click();
 		}
 
@@ -366,6 +368,14 @@ function renderResults(pages)
 
 }
 
+/* Stop (from either Stop button) unlocks the panel and drops the pending count. */
+window.addEventListener('eulc-stopped', () => {
+	totalTasks = 0;
+	tasksDone = 0;
+	scraperPanelOn();
+	scraperProgStatus.textContent = 'Stopped.';
+});
+
 function scraperPanelOff()
 {
 	scraperContainer.classList.add("scraper-overlay");
@@ -510,10 +520,11 @@ export async function scrapBibPages(_bibID, pagesArr, onPageDone)
 }
 
 /* "Get Pages Start" followed by "Scrap results", for one bib, headless. */
-export async function scrapBibFully({ bibID: _bibID, totalPagesNum: _totalPagesNum }, onPageDone)
+export async function scrapBibFully({ bibID: _bibID, totalPagesNum: _totalPagesNum }, onPageDone, onPagesFound)
 {
 	const pagesNumMapping = getPagesNumMap(_bibID, _totalPagesNum);
 	const pagesArr = await getBibPages(_bibID, _totalPagesNum);
+	onPagesFound?.(pagesArr.length);
 
 	await scrapBibPages(_bibID, pagesArr, onPageDone);
 

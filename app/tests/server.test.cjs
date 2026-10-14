@@ -101,3 +101,17 @@ test('the renderer can raise the upstream time limit within a cap', async t => {
   assert.equal(await response.text(),'ok');
   assert.ok(seen instanceof AbortSignal);
 });
+test('a request cancelled by the app also cancels the upstream request', async t => {
+  let upstreamSignal;
+  const base = await fixture(t, (url, options) => new Promise((resolve, reject) => {
+    upstreamSignal = options.signal;
+    options.signal.addEventListener('abort', () => reject(options.signal.reason));
+  }));
+  const controller = new AbortController();
+  const pending = fetch(base+'/fetch?url='+encodeURIComponent('https://www.eulc.edu.eg/'), {signal: controller.signal}).catch(err => err);
+  while (!upstreamSignal) await new Promise(r => setTimeout(r, 10));
+  controller.abort();
+  assert.equal((await pending).name, 'AbortError');
+  for (let i = 0; i < 50 && !upstreamSignal.aborted; i++) await new Promise(r => setTimeout(r, 10));
+  assert.ok(upstreamSignal.aborted);
+});

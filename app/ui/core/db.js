@@ -18,6 +18,7 @@ export const cacheDB =
 {
   getSavedResult: getSavedResult.bind(cacheDBObj),
   saveResult: saveResult.bind(cacheDBObj),
+  getAllKeys: () => cacheDBObj.keys(),
   deleteAllResults: clearDatabase.bind(cacheDBObj)
 }
 

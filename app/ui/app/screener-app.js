@@ -41,7 +41,11 @@ import {
     removeDupesFromArr,
     downloadFilesZIP,
     sanitizeFileName,
-    notify
+    notify,
+    operationSignal,
+    stopOperations,
+    isStopError,
+    getRequestsInFlight
 }
 from '../utils/utils.js';
 
@@ -71,6 +75,7 @@ const PDF_NAME_MAX_LEN   = 120;       // whole "title [Year][bibID]" stem
 const PDF_NAME_TITLE_WORDS = Infinity;  // set to FOLDER_DESIG_WORDS_LEN to mirror the copy-desig button
 const SKIP_CACHED_ON_SCRAP_ALL = true;  // a bib already scraped cleanly is not scraped again
 let batchBusy = false;
+let searchRunning = false;
 
 /* Workspace mode: 'search' screens the pages of known theses,
    'builder' discovers theses in the EULC catalogue. Each mode keeps its
@@ -155,6 +160,11 @@ const barNewLibBtn = document.getElementById('barNewLibBtn');
 
 const scrapAllBtn    = document.getElementById('scrapAllBtn');
 const downloadAllBtn = document.getElementById('downloadAllBtn');
+const exportJsonBtn  = document.getElementById('exportJsonBtn');
+const batchNote      = document.getElementById('batchNote');
+const stopButton     = document.getElementById('stopButton');
+const scraperStopBtn = document.getElementById('scraperStopBtn');
+const collectedIDs   = new Set();
 
 /* Form components, built in initScreener */
 let searchQueries, builderQueries, searchYears, builderYears;
@@ -209,7 +219,9 @@ export function initScreener(_scraperCallback) {
     searchButton.addEventListener('click', async() => {
         try {
             searchButton.disabled = true;
+            searchRunning = true;
             setModeTabsDisabled(true);
+            updateBatchButtons();
             if (mode === 'builder') {
                 await runBuilderSearch();
             } else {
@@ -218,11 +230,18 @@ export function initScreener(_scraperCallback) {
         }
         catch (err)
         {
-            window.reportAppError?.(err);
+            if (isStopError(err)) {
+                resultItmsNumLog.innerText = screenerResGrp.children.length || '';
+                processFilters();
+                progressStatus.textContent = 'Stopped. Results found so far are kept.';
+            } else {
+                window.reportAppError?.(err);
+            }
         }
         finally
         {
             searchButton.disabled = false;
+            searchRunning = false;
             setModeTabsDisabled(false);
             updateSelectionUI();
         }
@@ -490,81 +509,148 @@ export function initScreener(_scraperCallback) {
 
     /* ---------- Batch transcript actions (Search mode) ---------- */
 
+    // Theses whose transcripts are already collected, so the export buttons
+    // reflect stored content rather than whether results are on screen.
+    cacheDB.getAllKeys().then(keys => {
+        for (const key of keys) collectedIDs.add(String(key));
+        updateBatchButtons();
+    }).catch(err => console.error('Could not read the transcript store', err));
+
+    /* ---------- Stop ---------- */
+
+    for (const btn of [stopButton, scraperStopBtn]) {
+        btn.addEventListener('click', () => {
+            stopOperations();
+            notify('Stopped.');
+        });
+    }
+    window.addEventListener('eulc-activity', updateStopButtons);
+
     scrapAllBtn.addEventListener('click', async() => {
-
         const results = getVisibleResultsMeta();
+        if (!results.length) return notify('There are no visible results to collect.', 'warn');
 
-        if (!results.length) {
-            return notify('There are no visible results to collect.', 'warn');
-        }
-
-        await runBatch(results, async(result, index) => {
-
-            if (SKIP_CACHED_ON_SCRAP_ALL) {
+        let collected = 0, skipped = 0;
+        const { failed, stopped } = await runBatch('Collecting', results, async(result, report) => {
+            if (SKIP_CACHED_ON_SCRAP_ALL && collectedIDs.has(result.bibID)) {
                 const cached = await cacheDB.getSavedResult(result.bibID);
-                if (cached?.ok) {
-                    return console.log(`[${index + 1}/${results.length}] BibID ${result.bibID} already scraped, skipped.`);
-                }
+                if (cached?.ok) { skipped++; return; }
             }
-
-            progressStatus.textContent = `Collecting ${result.bibID} (${index + 1} of ${results.length})...`;
-            await scrapResultToCache(result);
-
+            report(0, 'finding pages');
+            await scrapResultToCache(result, report);
+            collected++;
         });
 
+        finishBatch(`Collected ${collected}${skipped ? `, ${skipped} already collected` : ''} of ${results.length} theses`, failed, stopped);
     });
 
     downloadAllBtn.addEventListener('click', async() => {
-
-        const results = getVisibleResultsMeta();
-
-        if (!results.length) {
-            return notify('There are no visible results to export.', 'warn');
-        }
-
         if (typeof window.appAPI?.htmlToPdfBuffer !== 'function') {
             return console.error("window.appAPI.htmlToPdfBuffer is missing: expose the 'html-to-pdf-buffer' channel in preload.js.");
         }
+        const results = getExportableResults();
+        if (!results) return;
 
         const files = [];
-
-        await runBatch(results, async(result, index) => {
-
-            // A bib that was never scrapped is scrapped now, so the button
-            // works on its own; the cache makes repeat runs cheap.
-            let record = await cacheDB.getSavedResult(result.bibID);
-
-            if (!record?.ok) {
-                progressStatus.textContent = `Collecting ${result.bibID} (${index + 1} of ${results.length})...`;
-                record = await scrapResultToCache(result);
-            }
-
-            if (!record.pages?.length) {
-                throw new Error("nothing scraped");
-            }
-
-            progressStatus.textContent = `Rendering PDF for ${result.bibID} (${index + 1} of ${results.length})...`;
-
+        const { failed, stopped } = await runBatch('Rendering PDF for', results, async(result) => {
+            const record = await getCollectedRecord(result.bibID);
             const fileStem = getPdfNameStem(result);
-            const html = buildBibTranscriptHTML(fileStem, record.pages, record.pagesNumMap);
-            const res = await window.appAPI.htmlToPdfBuffer(html);
-
-            if (!res?.ok) {
-                throw new Error(res?.error ?? "PDF generation failed");
-            }
-
+            const res = await window.appAPI.htmlToPdfBuffer(buildBibTranscriptHTML(fileStem, record.pages, record.pagesNumMap));
+            if (!res?.ok) throw new Error(res?.error ?? "PDF generation failed");
             files.push({ fileName: `${fileStem}.pdf`, fileContent: new Uint8Array(res.data) });
-
         });
 
-        if (!files.length) {
-            return notify('No PDFs were produced.', 'warn');
-        }
-
-        downloadFilesZIP(files, "[EULC_SCREENER]" + "[PDFs]" + " " + getTimeStamp().slice(0, -4));
-
+        if (stopped) return finishBatch('Nothing exported', failed, stopped);
+        if (files.length) downloadFilesZIP(files, "[EULC_SCREENER]" + "[PDFs]" + " " + getTimeStamp().slice(0, -4));
+        finishBatch(`Exported ${files.length} PDFs`, failed);
     });
 
+    exportJsonBtn.addEventListener('click', async() => {
+        const results = getExportableResults();
+        if (!results) return;
+
+        const theses = [];
+        const { failed, stopped } = await runBatch('Reading', results, async(result) => {
+            const record = await getCollectedRecord(result.bibID);
+            theses.push({
+                bibID: result.bibID,
+                title: result.title,
+                publishYear: result.publishYear,
+                totalPages: Number(result.totalPagesNum) || result.totalPagesNum,
+                collectedAt: record.date,
+                missingPages: record.missingPages ?? [],
+                pages: record.pages.map(page => ({ virtualPage: page.virtPageNum, content: page.pageContent }))
+            });
+        });
+
+        if (stopped) return finishBatch('Nothing exported', failed, stopped);
+        if (theses.length) downloadJSON(theses, "[EULC_SCREENER]" + "[Transcripts]" + " " + getTimeStamp().slice(0, -4));
+        finishBatch(`Exported ${theses.length} transcripts as JSON`, failed);
+    });
+
+}
+
+/* Visible results that have collected transcripts; tells the user about the rest. */
+function getExportableResults()
+{
+    const visible = getVisibleResultsMeta();
+    const results = visible.filter(result => collectedIDs.has(result.bibID));
+    if (!results.length) {
+        notify('None of the visible theses has a collected transcript yet. Use Collect transcripts first.', 'warn');
+        return null;
+    }
+    if (results.length < visible.length) {
+        notify(`${visible.length - results.length} visible theses are not collected yet and are left out.`, 'warn', 6000);
+    }
+    return results;
+}
+
+async function getCollectedRecord(bibID)
+{
+    const record = await cacheDB.getSavedResult(bibID);
+    if (!record?.ok || !record.pages?.length) {
+        collectedIDs.delete(bibID);
+        throw new Error("no collected transcript");
+    }
+    return record;
+}
+
+function finishBatch(summary, failed, stopped = false)
+{
+    if (!stopped) progressBar.style.width = '100%';
+    progressStatus.textContent = (stopped ? 'Stopped. ' : '') + summary + (failed.length ? ` · failed: ${failed.join(', ')}` : '');
+    if (failed.length) notify(`${failed.length} theses failed: ${failed.join(', ')}. See the console (F12) for details.`, 'warn', 8000);
+    updateBatchButtons();
+}
+
+/* Collect needs visible results; the exports need at least one visible
+   thesis with a collected transcript. */
+function updateBatchButtons()
+{
+    const visible = getVisibleItems();
+    const collected = visible.filter(item => collectedIDs.has(item.dataset.bibId)).length;
+    const busy = batchBusy || searchRunning;
+    updateStopButtons();
+    scrapAllBtn.disabled = busy || !visible.length;
+    downloadAllBtn.disabled = exportJsonBtn.disabled = busy || !collected;
+    batchNote.textContent = visible.length
+        ? `${collected} of ${visible.length} visible theses collected.`
+        : '';
+}
+
+/* Stop is live while a search or batch runs, or any EULC request is in
+   flight (the transcript window included). Disabling waits a moment so a
+   chain of back-to-back requests does not make it flicker. */
+let stopIdleTimer = null;
+function updateStopButtons()
+{
+    const active = searchRunning || batchBusy || getRequestsInFlight() > 0;
+    clearTimeout(stopIdleTimer);
+    if (active) {
+        stopButton.disabled = scraperStopBtn.disabled = false;
+    } else {
+        stopIdleTimer = setTimeout(() => { stopButton.disabled = scraperStopBtn.disabled = true; }, 400);
+    }
 }
 
 /***********************************************
@@ -774,6 +860,7 @@ function setItemChecked(item, checked)
 
 function updateSelectionUI()
 {
+    updateBatchButtons();
     const checked = screenerResGrp.querySelectorAll('.result-item.checked').length;
     checkedNumLog.innerText = mode === 'builder' && screenerResGrp.children.length ? checked : '';
     barNewLibBtn.disabled = !checked;
@@ -1282,13 +1369,24 @@ function getPdfNameStem({ title, publishYear, bibID })
     return sanitizeFileName(trimmedTitle, PDF_NAME_MAX_LEN - suffix.length) + suffix;
 }
 
-async function scrapResultToCache(result)
+/* Scrapes one thesis fully. report(fraction, detail) drives the progress
+   bar: finding the pages is the first 10%, collecting them the rest. */
+async function scrapResultToCache(result, report = () => {})
 {
-    const { pages, pagesNumMap, missingPages } = await scrapBibFully(result);
+    let done = 0, total = 0;
+    const { pages, pagesNumMap, missingPages } = await scrapBibFully(result, () => {
+        done++;
+        report(0.1 + 0.9 * (done / total), `page ${done} of ${total}`);
+    }, (pageCount) => {
+        total = pageCount;
+        report(0.1, `found ${pageCount} pages`);
+    });
 
     if (missingPages.length) {
         console.warn(`BibID ${result.bibID}: missing virtual pages ${missingPages.join(', ')}`);
     }
+
+    if (!pages.length) throw new Error('no transcript pages could be collected');
 
     const record = {
         ...result,
@@ -1296,49 +1394,63 @@ async function scrapResultToCache(result)
         pagesNumMap,
         missingPages,
         date: getTimeStamp(),
-        ok: Boolean(pages.length)
+        ok: true
     };
 
     await cacheDB.saveResult(record);
+    collectedIDs.add(result.bibID);
+    updateBatchButtons();
 
     return record;
 }
 
-/* One progress step per RESULT (not per page). A result that blows up is
-   logged and stepped over so a single bad bib cannot abort the whole run. */
-async function runBatch(results, worker)
+/* Runs worker(result, report) over the results one at a time and keeps the
+   progress bar moving: report(fraction, detail) moves it within the current
+   thesis. A result that blows up is logged and stepped over so one bad bib
+   cannot abort the whole run; Stop ends the run. Returns the failed BibIDs
+   and whether the run was stopped. */
+async function runBatch(verb, results, worker)
 {
     if (batchBusy) {
-        return notify('A batch operation is already running.', 'warn');
+        notify('A batch operation is already running.', 'warn');
+        return { failed: [], stopped: false };
     }
 
     batchBusy = true;
-    scrapAllBtn.disabled = downloadAllBtn.disabled = searchButton.disabled = true;
+    searchButton.disabled = true;
     setModeTabsDisabled(true);
+    updateBatchButtons();
 
-    const progressObj = new Progress(results.length, progressBar, progressStatus);
+    const signal = operationSignal();
     const failed = [];
+    const total = results.length;
+    let stopped = false;
 
     try {
         for (const [index, result] of results.entries()) {
+            if (signal.aborted) { stopped = true; break; }
+            const report = (fraction = 0, detail = '') => {
+                const overall = (index + Math.min(Math.max(fraction, 0), 1)) / total;
+                progressBar.style.width = `${(overall * 100).toFixed(1)}%`;
+                progressStatus.textContent = `${verb} ${result.bibID} (${index + 1} of ${total})${detail ? ` · ${detail}` : ''} · ${Math.floor(overall * 100)}%`;
+            };
+            report(0);
             try {
-                await worker(result, index);
+                await worker(result, report);
             } catch (err) {
+                if (isStopError(err) || signal.aborted) { stopped = true; break; }
                 failed.push(result.bibID);
                 console.error(`BibID ${result.bibID} failed:`, err);
-            } finally {
-                progressObj.progress(1);
             }
+            report(1);
         }
     } finally {
         batchBusy = false;
-        scrapAllBtn.disabled = downloadAllBtn.disabled = searchButton.disabled = false;
+        searchButton.disabled = false;
         setModeTabsDisabled(false);
-
-        if (failed.length) {
-            progressStatus.textContent += ` | failed: ${failed.join(', ')}`;
-        }
+        updateBatchButtons();
     }
+    return { failed, stopped };
 }
 
 function isValidLibJson(jsonArr) {

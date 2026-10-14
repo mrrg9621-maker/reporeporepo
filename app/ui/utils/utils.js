@@ -429,20 +429,53 @@ const maestroPace = MAESTRO_PACE;
 //Globals
 let orchestraCurrentSize = 0;
 
+/* Stop: every EULC request carries the signal of the current operation
+   controller. stopOperations() aborts it (cancelling in-flight and queued
+   requests) and starts a fresh controller for whatever the user does next. */
+let operationController = new AbortController();
+let requestsInFlight = 0;
+
+export function operationSignal() {
+    return operationController.signal;
+}
+export function stopOperations() {
+    operationController.abort(new DOMException('Stopped by the user', 'AbortError'));
+    operationController = new AbortController();
+    window.dispatchEvent(new Event('eulc-stopped'));
+}
+export function isStopError(err) {
+    return err?.name === 'AbortError' || err?.cause?.name === 'AbortError';
+}
+export function throwIfStopped(signal) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Stopped by the user', 'AbortError');
+}
+export function getRequestsInFlight() {
+    return requestsInFlight;
+}
+function trackRequest(delta) {
+    requestsInFlight += delta;
+    window.dispatchEvent(new CustomEvent('eulc-activity', { detail: requestsInFlight }));
+}
+
 
 //Core
-export async function eulcFetch(url, { timeout, ...params } = {}) {
+export async function eulcFetch(url, { timeout, signal = operationSignal(), ...params } = {}) {
     const upstream = new URL(url);
     if (!['eulc.edu.eg', 'www.eulc.edu.eg'].includes(upstream.hostname)) throw new Error('Unsupported EULC URL');
+    throwIfStopped(signal);
     let response;
+    trackRequest(1);
     try {
         // timeout (ms) raises the local proxy's upstream time limit for slow EULC pages
-        response = await fetch('/fetch?' + (timeout ? `timeout=${timeout}&` : '') + 'url=' + encodeURIComponent(upstream.href), params);
+        response = await fetch('/fetch?' + (timeout ? `timeout=${timeout}&` : '') + 'url=' + encodeURIComponent(upstream.href), { ...params, signal });
     } catch (cause) {
+        if (signal.aborted) throw signal.reason ?? cause;
         const error = new Error(`Cannot contact the local EULC server: ${cause.message}`, {cause});
         error.details = {source:'browser-to-local-server', method:params.method || 'GET', url:upstream.href};
         console.error('[EULC request failed]', error.details, error);
         throw error;
+    } finally {
+        trackRequest(-1);
     }
     if (!response.ok) {
         const body = await response.text();
@@ -459,10 +492,16 @@ export async function eulcFetch(url, { timeout, ...params } = {}) {
     }
     return response;
 }
-export async function orchestrateFetch(url, params) {
-    while (orchestraCurrentSize >= orchestraMaxSize) await sleep(maestroPace);
+export async function orchestrateFetch(url, params = {}) {
+    // The signal is taken when the request is queued, so a Stop also cancels queued requests
+    const signal = params.signal ?? operationSignal();
+    while (orchestraCurrentSize >= orchestraMaxSize) {
+        throwIfStopped(signal);
+        await sleep(maestroPace);
+    }
+    throwIfStopped(signal);
     orchestraCurrentSize++;
-    try { return await eulcFetch(url, params); }
+    try { return await eulcFetch(url, { ...params, signal }); }
     finally { orchestraCurrentSize--; }
 }
 
@@ -483,7 +522,8 @@ const dbCMD =
 		getAll: 'getAll',
 		delete: 'delete',
 		clear: 'clear',
-        count: 'count'
+        count: 'count',
+        getAllKeys: 'getAllKeys'
 	};
 	
 const dbWriteCMDs = ['put', 'delete', 'clear'];
@@ -559,6 +599,11 @@ export class Database {
     async count()
 	{
 		return this._executeDbCommand(dbCMD.count);
+    }
+
+    async keys()
+	{
+		return this._executeDbCommand(dbCMD.getAllKeys);
     }
 
 

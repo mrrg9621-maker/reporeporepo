@@ -26,6 +26,7 @@ document.getElementById('densityButton').addEventListener('click', () => savePre
 systemTheme?.addEventListener('change', () => { if (readPreferences().theme === 'system') applyPreferences(); });
 function setStatus(text, state = 'ready') { status.textContent = text; status.dataset.state = state; }
 window.reportAppError = err => {
+  if (err?.name === 'AbortError' || err?.cause?.name === 'AbortError') return; // Stop pressed: not an error
   lastError = err;
   console.error('[EULC application error]', err);
   document.getElementById('appErrorText').textContent = err?.message || String(err);
