@@ -6,16 +6,16 @@ export const URL_BASES =
 {
         SEARCH: 'eulc.edu.eg/eulc_v5/Libraries/Thesis/BrowseThesisPages.aspx?fn=ViewSearchResult&BibID=', 
         BROWSE: 'eulc.edu.eg/eulc_v5/Libraries/Thesis/BrowseThesisPages.aspx?fn=PublicDrawThesis&BibID=',
-        /* One EULC advanced search (Form4). Only the first text slot is used:
-           the app runs one request per query and combines the BibID sets itself,
-           so any number of required/optional queries can be expressed. */
-        LIBRARY: ({ text = '', field = '0.', fullText = '', wordForms = '', bibRange = '', years = '',
+        /* One EULC advanced search (Form4). EULC reads 3 search boxes, joined
+           left to right by opr1/opr2 (and | or | and not); boxes 4+ are ignored.
+           slots: [{ text, field }] (up to 3), ops: [opr1, opr2]. */
+        LIBRARY: ({ slots = [], ops = [], fullText = '', wordForms = '', bibRange = '', years = '',
                     order = 'publishYear asc', exact = false, scope = '1.', itemType = '24.2.5.' } = {}) =>
             'eulc.edu.eg/eulc_v5/libraries/Start.aspx?' + new URLSearchParams([
                 ['ScopeID', '1.'], ['fn', 'ApplySearch'], ['SearchIdForm', ''], ['ScopeIDSelect', scope], ['ItemType', itemType],
-                ['SearchText1', text], ['criteria1', field], ['opr1', 'and'],
-                ['SearchText2', ''], ['criteria2', '1.'], ['opr2', 'and'],
-                ['SearchText3', ''], ['criteria3', '1.'],
+                ['SearchText1', slots[0]?.text ?? ''], ['criteria1', slots[0]?.field ?? '0.'], ['opr1', ops[0] ?? 'and'],
+                ['SearchText2', slots[1]?.text ?? ''], ['criteria2', slots[1]?.field ?? '1.'], ['opr2', ops[1] ?? 'and'],
+                ['SearchText3', slots[2]?.text ?? ''], ['criteria3', slots[2]?.field ?? '1.'],
                 ['SearchTextFT', fullText], ['Generation_Term', wordForms], ['BibID', bibRange], ['PublishYear', years],
                 ['OrderKey', order], ['PageSize', '100000000'], ...(exact ? [['ExactSearch', '1']] : [])
             ]).toString(),

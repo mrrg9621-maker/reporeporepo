@@ -52,7 +52,7 @@ from '../utils/utils.js';
 import { screenerDB, cacheDB } from '../core/db.js';
 
 import {
-    getBibs, getLib, getPrevImgBlobObjs
+    getBibs, getLib, getPrevImgBlobObjs, planCatalogueRequests
 }
 from '../core/screener-core.js';
 
@@ -182,7 +182,7 @@ export function initScreener(_scraperCallback) {
     searchQueries = createQueryList(document.getElementById('querySpBoxes'), document.getElementById('queryAddBtn'),
         { placeholder: 'Word or phrase in the thesis pages…', noun: 'term' });
     builderQueries = createQueryList(document.getElementById('builderQueries'), document.getElementById('builderQueryAddBtn'),
-        { placeholder: 'Catalogue search text…', noun: 'query', withField: true });
+        { placeholder: 'Catalogue search text…', noun: 'query', withField: true, onChange: updateBuilderPlanNote });
     searchYears = createYearField(document.getElementById('searchYears'), 'search');
     builderYears = createYearField(document.getElementById('builderYears'), 'builder');
 
@@ -720,18 +720,27 @@ async function runBuilderSearch()
 
     const progressObj = new Progress(1, progressBar, progressStatus);
 
-    const { skipped } = await getLib({ ...params, queries }, progressObj, (record) => {
+    await getLib({ ...params, queries }, progressObj, (record) => {
         if (!keptIDs.has(record.bibID)) setResItemForRender(record);
     });
-    if (skipped.length) {
-        notify(`EULC did not answer these optional queries, so they were left out: ${skipped.join(', ')}`, 'warn', 9000);
-    }
 
     resetSpBox(titleFiltSpBoxes, false);
     resetSpBox(contentFiltSpBoxes, false);
 
     resultItmsNumLog.innerText = visResultItmsNumLog.innerText = screenerResGrp.children.length;
     processFilters();
+}
+
+/* Tells how many EULC requests the current builder queries need. */
+function updateBuilderPlanNote()
+{
+    const note = document.getElementById('builderPlanNote');
+    if (!note || !builderQueries) return;
+    const queries = builderQueries.values();
+    const requests = queries.length ? planCatalogueRequests(queries).length : 1;
+    note.textContent = requests === 1
+        ? 'These queries go to EULC as one request.'
+        : `EULC takes 3 boxes per search, so these queries need ${requests} requests; the app combines them.`;
 }
 
 function readBuilderForm()
@@ -966,11 +975,13 @@ function processContentFilts(resultElements = screenerResGrp.querySelectorAll('.
  *               FORM COMPONENTS               *
  ***********************************************/
 
-/* A list of query rows: [Required] [field] [text] [remove].
-   A lone row is always required and cannot be unticked. Adding the
-   second row unticks the first; every added row starts optional. */
-function createQueryList(container, addButton, { placeholder, noun, withField = false })
+/* A list of query rows: [AND/OR] [field] [text] [remove]. Ticked rows are
+   ANDed, unticked rows ORed (a match needs every AND row and, when there
+   are OR rows, at least one of them). A lone row is always ticked and
+   locked. Adding the second row unticks the first; added rows start OR. */
+function createQueryList(container, addButton, { placeholder, noun, withField = false, onChange })
 {
+    container.addEventListener('input', () => onChange?.());
     container.classList.toggle('with-field', withField);
 
     const rows = () => [...container.querySelectorAll('.query-row')];
@@ -983,13 +994,15 @@ function createQueryList(container, addButton, { placeholder, noun, withField = 
             const must = row.querySelector('.query-must input');
             if (single) must.checked = true;
             must.disabled = single;
+            row.querySelector('.query-op').textContent = must.checked ? 'AND' : 'OR';
             row.querySelector('.query-must').title = single
-                ? `A single ${noun} is always required`
-                : 'Ticked: must match. Unticked: optional';
+                ? `A single ${noun} always has to match`
+                : 'Ticked (AND): must match. Unticked (OR): at least one of the OR terms must match';
             row.classList.toggle('is-required', must.checked);
             row.querySelector('.query-remove').hidden = single;
         }
         addButton.disabled = all.length >= MAX_QUERIES;
+        onChange?.();
     }
 
     function addRow({ text = '', must = false, field = EULC_DEFAULT_FIELD } = {})
@@ -1004,7 +1017,7 @@ function createQueryList(container, addButton, { placeholder, noun, withField = 
         mustBox.checked = must;
         mustBox.addEventListener('change', sync);
         const mustText = document.createElement('span');
-        mustText.textContent = 'Required';
+        mustText.className = 'query-op';
         mustLabel.append(mustBox, mustText);
         row.append(mustLabel);
 
@@ -1219,6 +1232,7 @@ function applyBuilderParams(params)
         return;
     }
     builderQueries.set((params.queries || []).filter(q => q.text !== QUERY_PLACEHOLDER));
+    updateBuilderPlanNote();
     builderYears.set(params.years || {});
     builderPagesMinInput.value = params.pages?.min ?? '';
     builderPagesMaxInput.value = params.pages?.max ?? '';

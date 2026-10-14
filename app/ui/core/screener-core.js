@@ -39,9 +39,47 @@ let searchSignal;
    queries never exclude anything once a required query exists. */
 export function matchesQueries(hits, queries)
 {
-    const required = queries.filter(q => q.must);
-    if (required.length) return required.every(q => hits.has(q));
-    return queries.some(q => hits.has(q));
+    const anded = queries.filter(q => q.must);
+    const ored = queries.filter(q => !q.must);
+    return anded.every(q => hits.has(q)) && (!ored.length || ored.some(q => hits.has(q)));
+}
+
+/* EULC's catalogue form takes 3 search boxes joined left to right by
+   opr1/opr2 (and | or | and not); boxes 4+ are ignored. Up to 3 queries
+   fit one request: ORed queries first, then ANDed ones, which evaluates as
+   (o1 or o2) and a1. More queries are packed 3 per request, ANDed queries
+   together and ORed queries together, and the BibID sets are combined. */
+export const EULC_BOXES = 3;
+export function planCatalogueRequests(queries)
+{
+    const anded = queries.filter(q => q.must);
+    const ored = queries.filter(q => !q.must);
+    const chunk = (list) => Array.from({ length: Math.ceil(list.length / EULC_BOXES) }, (_, i) => list.slice(i * EULC_BOXES, (i + 1) * EULC_BOXES));
+
+    if (queries.length <= EULC_BOXES) {
+        const slots = [...ored, ...anded];
+        const ops = slots.slice(1).map((_, i) => (i + 1 < ored.length ? 'or' : 'and'));
+        return [{ role: 'all', slots, ops }];
+    }
+    return [
+        ...chunk(anded).map(slots => ({ role: 'and', slots, ops: slots.slice(1).map(() => 'and') })),
+        ...chunk(ored).map(slots => ({ role: 'or', slots, ops: slots.slice(1).map(() => 'or') }))
+    ];
+}
+
+/* Final BibID order follows the first request that returned each BibID. */
+function combineCatalogueResults(results)
+{
+    const all = results.filter(r => r.plan.role === 'all');
+    if (all.length) return all[0].found;
+
+    const order = new Map();
+    for (const { found } of results) for (const item of found) if (!order.has(item.bibID)) order.set(item.bibID, item);
+
+    const andSets = results.filter(r => r.plan.role === 'and').map(r => new Set(r.found.map(i => i.bibID)));
+    const orSets = results.filter(r => r.plan.role === 'or').map(r => new Set(r.found.map(i => i.bibID)));
+    return [...order.values()].filter(({ bibID }) =>
+        andSets.every(set => set.has(bibID)) && (!orSets.length || orSets.some(set => set.has(bibID))));
 }
 
 /* Library builder: one EULC catalogue request per query, BibID sets
@@ -62,18 +100,24 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
 
     // Catalogue requests are slow on EULC's side (a broad title query can take
     // well over a minute), so only CATALOGUE_CONCURRENCY run at once, each with
-    // a long time limit and one retry. A failed required query aborts the
-    // search (its set would make the result wrong); a failed optional query is
-    // skipped and reported.
+    // a long time limit and one retry. Any request that still fails stops the
+    // search: a missing set would make the combined result wrong.
     const signal = operationSignal();
-    const skipped = [];
-    let finishedQueries = 0;
-    const reportQueries = () => progressObj?.status(`Catalogue queries: ${finishedQueries} of ${queries.length} done…`);
-    reportQueries();
+    const plans = planCatalogueRequests(queries);
+    let finishedRequests = 0;
+    const reportRequests = () => progressObj?.status(plans.length === 1
+        ? 'Searching the EULC catalogue…'
+        : `Catalogue requests: ${finishedRequests} of ${plans.length} done…`);
+    reportRequests();
 
-    async function runQuery(query)
+    async function runRequest(plan)
     {
-        const url = urler.get('LIBRARY', { ...eulc, text: query.text, field: query.field || field, years: yearParam });
+        const url = urler.get('LIBRARY', {
+            ...eulc,
+            slots: plan.slots.map(q => ({ text: q.text, field: q.field || field })),
+            ops: plan.ops,
+            years: yearParam
+        });
         let lastError;
         for (let attempt = 1; attempt <= CATALOGUE_ATTEMPTS; attempt++)
         {
@@ -88,45 +132,31 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
                 lastError = error;
                 const retryable = !error.status || error.status === 502 || error.status === 503 || error.status === 504;
                 if (!retryable) break;
-                console.warn(`Catalogue query "${query.text}" failed (attempt ${attempt} of ${CATALOGUE_ATTEMPTS})`, error);
+                console.warn(`Catalogue request failed (attempt ${attempt} of ${CATALOGUE_ATTEMPTS})`, plan, error);
             }
         }
         throw lastError;
     }
 
-    const lists = await mapLimit(queries, CATALOGUE_CONCURRENCY, async (query) => {
+    const results = await mapLimit(plans, CATALOGUE_CONCURRENCY, async (plan) => {
         try
         {
-            return { query, found: await runQuery(query) };
+            return { plan, found: await runRequest(plan) };
         }
         catch (error)
         {
             if (signal.aborted) throw error;
-            if (query.must || queries.length === 1) {
-                const wrapped = new Error(`The catalogue query "${query.text}" failed after ${CATALOGUE_ATTEMPTS} attempts. ${error.message}`, { cause: error });
-                throw wrapped;
-            }
-            skipped.push(query.text);
-            return { query, found: [] };
+            const terms = plan.slots.map(q => `"${q.text}"`).join(', ');
+            throw new Error(`The catalogue search for ${terms} failed after ${CATALOGUE_ATTEMPTS} attempts. ${error.message}`, { cause: error });
         }
         finally
         {
-            finishedQueries++;
-            reportQueries();
+            finishedRequests++;
+            reportRequests();
         }
     });
 
-    // Combine the BibID sets, keeping first-seen order
-    const hitsByBib = new Map();
-    for (const { query, found } of lists)
-    {
-        for (const item of found)
-        {
-            if (!hitsByBib.has(item.bibID)) hitsByBib.set(item.bibID, { item, hits: new Set() });
-            hitsByBib.get(item.bibID).hits.add(query);
-        }
-    }
-    const candidates = [...hitsByBib.values()].filter(({ hits }) => matchesQueries(hits, queries)).map(({ item }) => item);
+    const candidates = combineCatalogueResults(results);
 
     progressObj?.setTotal(candidates.length);
 
@@ -182,7 +212,7 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
     }));
 
     throwIfStopped(signal);
-    return { resultNum, skipped };
+    return { resultNum, requests: plans.length };
 }
 
 function parseCatalogue(html)

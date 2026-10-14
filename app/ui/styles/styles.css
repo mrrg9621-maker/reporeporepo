@@ -131,6 +131,7 @@ button:disabled{opacity:.42;cursor:not-allowed;transform:none!important;box-shad
 .query-row .query-field{height:calc(var(--control) + 2px);background:var(--input);font-size:12px}
 .query-row:has(.query-remove[hidden]){grid-template-columns:auto minmax(0,1fr)}
 .query-list.with-field .query-row:has(.query-remove[hidden]){grid-template-columns:auto 170px minmax(0,1fr)}
+.query-op{min-width:2.2em;text-align:center;letter-spacing:.5px}
 .query-must{display:inline-flex;align-items:center;gap:7px;height:calc(var(--control) + 2px);padding:0 12px 0 10px;border-radius:9px;background:var(--surface);border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--muted);cursor:pointer;user-select:none;transition:background .15s,color .15s,border-color .15s}
 .query-must:hover{border-color:var(--accent)}
 .query-must:has(input:checked){background:var(--tint);border-color:var(--tint-strong);color:var(--tint-text)}

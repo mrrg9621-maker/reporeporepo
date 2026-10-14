@@ -1,6 +1,6 @@
 # EULC Screener
 
-Revision: 2026-10-14 (Africa/Cairo). Version 2.3.1.
+Revision: 2026-10-14 (Africa/Cairo). Version 2.4.0.
 
 EULC Screener is an Electron desktop app for screening thesis libraries, searching transcripts, viewing matching pages, and exporting results. Its own local server starts and stops with the desktop app. No separate server or proxy needs to be started. The supplied localhost certificate/key are bundled in `resources/certs/`.
 
@@ -30,11 +30,11 @@ Request errors appear in a dismissible banner with **Copy details**, which copie
 
 ### Query rows (both modes)
 
-Add rows with **Add term** / **Add query** and remove them with ×. Each row has a **Required** tick:
+Add rows with **Add term** / **Add query** and remove them with ×. Each row has an **AND / OR** tick:
 
-- A single row is always required and cannot be unticked.
-- Adding a second row unticks the first; every new row starts unticked.
-- A match needs every required row. With no required row, any one row is enough. Optional rows never exclude anything once a required row exists.
+- A single row is always AND and cannot be switched.
+- Adding a second row switches the first to OR; every new row starts as OR.
+- A match needs every AND row and, when there are OR rows, at least one of them. Examples: `A and B` → both; `A or B` → either; `A and, B or, C or` → A plus B or C.
 
 **Publication years** has a **Range / Exact** switch. Exact uses one year as both ends. Switching to Exact keeps the start year, or the end year if the start is empty; switching back fills both ends with that year.
 
@@ -56,7 +56,7 @@ Both exports use stored transcripts and collect any that are missing first, with
 
 ### Build a library
 
-Queries the EULC catalogue. Each row picks a catalogue field (Title, Anywhere, Author, Supervisor, Subject headings, Table of contents, Publisher, Related work, Dewey number). The app sends one catalogue request per row and combines the BibID sets with the Required rules above, so any number of rows works. Further options map to the EULC advanced search form: **Location** (university), **Word matching** (exact words, inflections, synonyms), **Attachments contain** (full text), **BibID range**, **Sort by**, **Exact matches only**, plus a **Thesis size** page range checked against each catalogue record. Click a result to read its abstract.
+Queries the EULC catalogue. Each row picks a catalogue field (Title, Anywhere, Author, Supervisor, Subject headings, Table of contents, Publisher, Related work, Dewey number). EULC's search reads exactly 3 boxes joined left to right by `opr1`/`opr2` (`and`, `or`, `and not`); boxes 4 and above are ignored (checked against live EULC result counts). Up to 3 rows therefore go out as **one** request, OR rows first and AND rows after them, so `(B or C) and A`. With more rows, AND rows are packed 3 per request, OR rows 3 per request, and the app intersects/unites the BibID sets. A note under the rows says how many requests the current rows need. Further options map to the EULC advanced search form: **Location** (university), **Word matching** (exact words, inflections, synonyms), **Attachments contain** (full text), **BibID range**, **Sort by**, **Exact matches only**, plus a **Thesis size** page range checked against each catalogue record. Click a result to read its abstract.
 
 Every result has a checkbox. **New library** (or **New library from checked**) creates a library from the checked rows only; **Add to selected** appends them to the selected library. **Always show checked rows** keeps checked rows visible through the filters and carries them into the next catalogue search.
 
