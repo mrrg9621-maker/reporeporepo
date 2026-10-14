@@ -552,8 +552,9 @@ export function initScreener(_scraperCallback) {
         if (!results) return;
 
         const files = [];
-        const { failed, stopped } = await runBatch('Rendering PDF for', results, async(result) => {
-            const record = await getCollectedRecord(result.bibID);
+        const { failed, stopped } = await runBatch('Exporting', results, async(result, report) => {
+            const record = await ensureCollected(result, report);
+            report(0.95, 'rendering PDF');
             const fileStem = getPdfNameStem(result);
             const res = await window.appAPI.htmlToPdfBuffer(buildBibTranscriptHTML(fileStem, record.pages, record.pagesNumMap));
             if (!res?.ok) throw new Error(res?.error ?? "PDF generation failed");
@@ -570,8 +571,8 @@ export function initScreener(_scraperCallback) {
         if (!results) return;
 
         const theses = [];
-        const { failed, stopped } = await runBatch('Reading', results, async(result) => {
-            const record = await getCollectedRecord(result.bibID);
+        const { failed, stopped } = await runBatch('Exporting', results, async(result, report) => {
+            const record = await ensureCollected(result, report);
             theses.push({
                 bibID: result.bibID,
                 title: result.title,
@@ -590,29 +591,27 @@ export function initScreener(_scraperCallback) {
 
 }
 
-/* Visible results that have collected transcripts; tells the user about the rest. */
+/* The visible results; exports collect any transcript that is missing. */
 function getExportableResults()
 {
-    const visible = getVisibleResultsMeta();
-    const results = visible.filter(result => collectedIDs.has(result.bibID));
+    const results = getVisibleResultsMeta();
     if (!results.length) {
-        notify('None of the visible theses has a collected transcript yet. Use Collect transcripts first.', 'warn');
+        notify('There are no visible results to export.', 'warn');
         return null;
-    }
-    if (results.length < visible.length) {
-        notify(`${visible.length - results.length} visible theses are not collected yet and are left out.`, 'warn', 6000);
     }
     return results;
 }
 
-async function getCollectedRecord(bibID)
+/* A stored transcript, or a freshly collected one when none is stored yet. */
+async function ensureCollected(result, report)
 {
-    const record = await cacheDB.getSavedResult(bibID);
-    if (!record?.ok || !record.pages?.length) {
-        collectedIDs.delete(bibID);
-        throw new Error("no collected transcript");
+    if (collectedIDs.has(result.bibID)) {
+        const record = await cacheDB.getSavedResult(result.bibID);
+        if (record?.ok && record.pages?.length) return record;
+        collectedIDs.delete(result.bibID);
     }
-    return record;
+    report(0, 'collecting');
+    return scrapResultToCache(result, (fraction, detail) => report(fraction * 0.95, detail));
 }
 
 function finishBatch(summary, failed, stopped = false)
@@ -623,19 +622,18 @@ function finishBatch(summary, failed, stopped = false)
     updateBatchButtons();
 }
 
-/* Collect needs visible results; the exports need at least one visible
-   thesis with a collected transcript. */
+/* All three need visible results; the exports collect missing transcripts
+   themselves, so an uncollected thesis still counts. */
 function updateBatchButtons()
 {
     const visible = getVisibleItems();
     const collected = visible.filter(item => collectedIDs.has(item.dataset.bibId)).length;
     const busy = batchBusy || searchRunning;
     updateStopButtons();
-    scrapAllBtn.disabled = busy || !visible.length;
-    downloadAllBtn.disabled = exportJsonBtn.disabled = busy || !collected;
-    batchNote.textContent = visible.length
-        ? `${collected} of ${visible.length} visible theses collected.`
-        : '';
+    scrapAllBtn.disabled = downloadAllBtn.disabled = exportJsonBtn.disabled = busy || !visible.length;
+    batchNote.textContent = !visible.length ? ''
+        : collected === visible.length ? `All ${visible.length} visible theses collected.`
+        : `${collected} of ${visible.length} visible theses collected; exports collect the rest first.`;
 }
 
 /* Stop is live while a search or batch runs, or any EULC request is in
