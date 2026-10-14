@@ -1,0 +1,4 @@
+node_modules/
+downloads/
+# Private TLS key: keep it out of git, copy it into place locally.
+resources/certs/*.key

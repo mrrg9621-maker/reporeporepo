@@ -1,0 +1,9 @@
+@echo off
+setlocal
+powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0start-eulc.ps1"
+if errorlevel 1 (
+    echo.
+    echo EULC failed to start. See the error above.
+    pause
+    exit /b 1
+)
