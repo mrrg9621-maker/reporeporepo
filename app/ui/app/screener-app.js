@@ -635,11 +635,13 @@ async function runBuilderSearch()
     if (kept.length) screenerResCntr.classList.remove('hidden');
 
     const progressObj = new Progress(1, progressBar, progressStatus);
-    progressStatus.textContent = `Querying the EULC catalogue (${queries.length} ${queries.length === 1 ? 'request' : 'requests'})…`;
 
-    await getLib({ ...params, queries }, progressObj, (record) => {
+    const { skipped } = await getLib({ ...params, queries }, progressObj, (record) => {
         if (!keptIDs.has(record.bibID)) setResItemForRender(record);
     });
+    if (skipped.length) {
+        notify(`EULC did not answer these optional queries, so they were left out: ${skipped.join(', ')}`, 'warn', 9000);
+    }
 
     resetSpBox(titleFiltSpBoxes, false);
     resetSpBox(contentFiltSpBoxes, false);

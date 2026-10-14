@@ -1,10 +1,10 @@
 ﻿# Archives the portable EULC project and copies the ZIP file to the Windows clipboard.
 # Includes all file types, including resources/data, HTTPS certificates, icons and scripts.
-# Excludes downloads, installed npm packages, Git metadata and existing ZIP/partial archives.
+# Excludes downloads, logs, installed npm packages, Git metadata and existing ZIP/partial archives.
 # Source files are read only; no project files or folders are removed.
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$SkipDirNames = @('node_modules', 'downloads', '.git')
+$SkipDirNames = @('node_modules', 'downloads', 'logs', '.git')
 $SkipExtensions = @('.zip', '.partial')
 
 try { $CairoZone = [TimeZoneInfo]::FindSystemTimeZoneById('Egypt Standard Time') }

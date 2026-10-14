@@ -5,6 +5,7 @@ import {
     ArrayProcessor,
     arrayFromNUMRange,
     orchestrateFetch,
+    eulcFetch,
     URLER,
     getTextWithLineBreaks
 }
@@ -16,6 +17,9 @@ import { search } from './search.js';
  *               CONSTANTS                     *
  ***********************************************/
 const urler = new URLER(URL_PROTOCOL, URL_SUBDOMAINS, URL_BASES);
+const CATALOGUE_CONCURRENCY = 2;
+const CATALOGUE_TIMEOUT_MS = 180000;
+const CATALOGUE_ATTEMPTS = 2;
 
 /***********************************************
  *               GLOBALS                       *
@@ -53,22 +57,58 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
         ? (years.start && years.end && years.start !== years.end ? `${years.start}-${years.end}` : (years.start || years.end))
         : '';
 
-    // One catalogue request per query
-    const lists = await Promise.all(queries.map(async (query) => {
+    // Catalogue requests are slow on EULC's side (a broad title query can take
+    // well over a minute), so only CATALOGUE_CONCURRENCY run at once, each with
+    // a long time limit and one retry. A failed required query aborts the
+    // search (its set would make the result wrong); a failed optional query is
+    // skipped and reported.
+    const skipped = [];
+    let finishedQueries = 0;
+    const reportQueries = () => progressObj?.status(`Catalogue queries: ${finishedQueries} of ${queries.length} done…`);
+    reportQueries();
+
+    async function runQuery(query)
+    {
         const url = urler.get('LIBRARY', { ...eulc, text: query.text, field: query.field || field, years: yearParam });
-        const response = await orchestrateFetch(url);
-        const doc = new DOMParser().parseFromString(await response.text(), "text/html");
-        const found = [];
-        for (const result of doc.querySelectorAll("#ToPrint > table:has(a.NoPrint)"))
+        let lastError;
+        for (let attempt = 1; attempt <= CATALOGUE_ATTEMPTS; attempt++)
         {
-            const bibID = result.querySelector("tbody > tr:nth-child(1) > td:nth-child(1) > input[type=checkbox]")?.value;
-            if (!bibID) continue;
-            const titleEle = result.querySelector("tbody > tr:nth-child(1) > td:nth-child(2) > div:nth-child(2) > a");
-            const title = (titleEle ? getTextWithLineBreaks(titleEle) : '').replaceAll("\n", " ").replaceAll("/", " ").replaceAll("\\", " ").replace(/\s{2,}/g, " ").trim();
-            found.push({ bibID, title });
+            try
+            {
+                const response = await eulcFetch(url, { timeout: CATALOGUE_TIMEOUT_MS });
+                return parseCatalogue(await response.text());
+            }
+            catch (error)
+            {
+                lastError = error;
+                const retryable = !error.status || error.status === 502 || error.status === 503 || error.status === 504;
+                if (!retryable) break;
+                console.warn(`Catalogue query "${query.text}" failed (attempt ${attempt} of ${CATALOGUE_ATTEMPTS})`, error);
+            }
         }
-        return { query, found };
-    }));
+        throw lastError;
+    }
+
+    const lists = await mapLimit(queries, CATALOGUE_CONCURRENCY, async (query) => {
+        try
+        {
+            return { query, found: await runQuery(query) };
+        }
+        catch (error)
+        {
+            if (query.must || queries.length === 1) {
+                const wrapped = new Error(`The catalogue query "${query.text}" failed after ${CATALOGUE_ATTEMPTS} attempts. ${error.message}`, { cause: error });
+                throw wrapped;
+            }
+            skipped.push(query.text);
+            return { query, found: [] };
+        }
+        finally
+        {
+            finishedQueries++;
+            reportQueries();
+        }
+    });
 
     // Combine the BibID sets, keeping first-seen order
     const hitsByBib = new Map();
@@ -135,7 +175,37 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
         }
     }));
 
-    return resultNum;
+    return { resultNum, skipped };
+}
+
+function parseCatalogue(html)
+{
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const found = [];
+    for (const result of doc.querySelectorAll("#ToPrint > table:has(a.NoPrint)"))
+    {
+        const bibID = result.querySelector("tbody > tr:nth-child(1) > td:nth-child(1) > input[type=checkbox]")?.value;
+        if (!bibID) continue;
+        const titleEle = result.querySelector("tbody > tr:nth-child(1) > td:nth-child(2) > div:nth-child(2) > a");
+        const title = (titleEle ? getTextWithLineBreaks(titleEle) : '').replaceAll("\n", " ").replaceAll("/", " ").replaceAll("\\", " ").replace(/\s{2,}/g, " ").trim();
+        found.push({ bibID, title });
+    }
+    return found;
+}
+
+/* Promise.all with at most `limit` workers in flight; results keep input order. */
+async function mapLimit(items, limit, worker)
+{
+    const results = new Array(items.length);
+    let next = 0;
+    const run = async () => {
+        while (next < items.length) {
+            const index = next++;
+            results[index] = await worker(items[index], index);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+    return results;
 }
 export async function getBibs(bibIDs, queries, startYear, endYear, startPage, endPage, _progressObj, renderCb)
 {

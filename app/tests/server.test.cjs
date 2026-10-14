@@ -1,7 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {startServer, validateTarget} = require('../server/server.cjs');
+const {startServer, validateTarget, requestTimeout} = require('../server/server.cjs');
 const { uiRoot: root, certsDir } = require('../paths.cjs');
 const fixture = async (t, upstreamFetch) => {
   const server = await startServer({root, port:0, upstreamFetch});
@@ -84,4 +84,20 @@ test('local timeouts identify the proxy and use HTTP 504', async t => {
   const response = await fetch(base+'/fetch?url=https://www.eulc.edu.eg/');
   assert.equal(response.status,504);
   assert.equal(response.headers.get('X-EULC-Error-Source'),'local-proxy');
+});
+test('Electron-style aborts from the time limit are reported as 504', async t => {
+  const base = await fixture(t, async () => { const err = new Error('The operation was aborted due to timeout'); err.code = 23; throw err; });
+  const response = await fetch(base+'/fetch?url=https://www.eulc.edu.eg/');
+  assert.equal(response.status,504);
+});
+test('the renderer can raise the upstream time limit within a cap', async t => {
+  assert.equal(requestTimeout(null), 45000);
+  assert.equal(requestTimeout('180000'), 180000);
+  assert.equal(requestTimeout('9999999'), 300000);
+  assert.equal(requestTimeout('abc'), 45000);
+  let seen;
+  const base = await fixture(t, async (url, options) => { seen = options.signal; return new Response('ok'); });
+  const response = await fetch(base+'/fetch?timeout=120000&url='+encodeURIComponent('https://www.eulc.edu.eg/'));
+  assert.equal(await response.text(),'ok');
+  assert.ok(seen instanceof AbortSignal);
 });

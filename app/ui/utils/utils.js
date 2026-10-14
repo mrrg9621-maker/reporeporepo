@@ -159,6 +159,11 @@ export class Progress
 		
 	}
 
+    status(text)
+    {
+        this.progressStatusEle.textContent = text;
+    }
+
     setTotal(totalItems)
     {
         this.totalItems = totalItems;
@@ -426,12 +431,13 @@ let orchestraCurrentSize = 0;
 
 
 //Core
-export async function eulcFetch(url, params = {}) {
+export async function eulcFetch(url, { timeout, ...params } = {}) {
     const upstream = new URL(url);
     if (!['eulc.edu.eg', 'www.eulc.edu.eg'].includes(upstream.hostname)) throw new Error('Unsupported EULC URL');
     let response;
     try {
-        response = await fetch('/fetch?url=' + encodeURIComponent(upstream.href), params);
+        // timeout (ms) raises the local proxy's upstream time limit for slow EULC pages
+        response = await fetch('/fetch?' + (timeout ? `timeout=${timeout}&` : '') + 'url=' + encodeURIComponent(upstream.href), params);
     } catch (cause) {
         const error = new Error(`Cannot contact the local EULC server: ${cause.message}`, {cause});
         error.details = {source:'browser-to-local-server', method:params.method || 'GET', url:upstream.href};
@@ -448,6 +454,7 @@ export async function eulcFetch(url, params = {}) {
             finalUrl:decodeURIComponent(response.headers.get('X-EULC-Final-URL') || ''), responseBody:body};
         console.error('[EULC request failed]', error.details);
         window.eulcLastRequestError = error.details;
+        error.status = response.status;
         throw error;
     }
     return response;

@@ -6,6 +6,14 @@ const path = require('node:path');
 const paths = require('../paths.cjs');
 const { version } = require('../package.json');
 const ALLOWED_HOSTS = new Set(['www.eulc.edu.eg', 'eulc.edu.eg']);
+// Upstream time limit. The renderer may ask for more (catalogue searches can
+// take minutes on EULC's side) via ?timeout=<ms>, up to MAX_TIMEOUT_MS.
+const DEFAULT_TIMEOUT_MS = 45000;
+const MAX_TIMEOUT_MS = 300000;
+function requestTimeout(value) {
+  const ms = Number(value);
+  return Number.isFinite(ms) && ms > 0 ? Math.min(Math.max(ms, 1000), MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
+}
 function validateTarget(value) {
   const url = new URL(value);
   if (!ALLOWED_HOSTS.has(url.hostname) || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || (url.port && !['80', '443'].includes(url.port))) {
@@ -25,9 +33,9 @@ async function readBody(req, limit = 2 * 1024 * 1024) {
 function createServer({root = paths.uiRoot, upstreamFetch = globalThis.fetch, tls} = {}) {
   const cookies = new Map();
   let requestNumber = 0;
-  async function upstream(target, method, body, contentType) {
+  async function upstream(target, method, body, contentType, timeoutMs = DEFAULT_TIMEOUT_MS) {
     let url = validateTarget(target);
-    const signal = AbortSignal.timeout(45000);
+    const signal = AbortSignal.timeout(timeoutMs);
     for (let redirects = 0; redirects <= 5; redirects++) {
       const headers = {'User-Agent': 'Mozilla/5.0 EULC-Screener/2.0', 'Accept': '*/*'};
       if (contentType) headers['Content-Type'] = contentType;
@@ -71,7 +79,8 @@ function createServer({root = paths.uiRoot, upstreamFetch = globalThis.fetch, tl
         res.setHeader('X-EULC-Target-URL', encodeURIComponent(target));
         const started = Date.now();
         console.info(`[EULC ${requestId}] ${req.method} ${target}`);
-        const {response, finalUrl} = await upstream(target, req.method, await readBody(req), req.headers['content-type']);
+        const timeoutMs = requestTimeout(url.searchParams.get('timeout'));
+        const {response, finalUrl} = await upstream(target, req.method, await readBody(req), req.headers['content-type'], timeoutMs);
         const body = Buffer.from(await response.arrayBuffer());
         const duration = Date.now() - started;
         const responseHeaders = {
@@ -108,7 +117,8 @@ function createServer({root = paths.uiRoot, upstreamFetch = globalThis.fetch, tl
       }
       const explanation = details.join(' -> ');
       if (requestId) {
-        const timedOut = /TimeoutError|ETIMEDOUT|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT/.test(explanation);
+        // Electron's fetch reports our own time limit as "aborted due to timeout" or ABORT_ERR
+        const timedOut = /TimeoutError|ETIMEDOUT|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT|timeout|ABORT_ERR|AbortError/i.test(explanation);
         const status = timedOut ? 504 : 502;
         const message = `Local proxy failed before it could return a complete upstream response.\nRequest: ${requestId}\n${req.method} ${target}\n${explanation}`;
         console.error(`[EULC ${requestId}] local proxy HTTP ${status}: ${explanation}`, {target});
@@ -135,4 +145,4 @@ async function startServer(options = {}) {
   });
   return server;
 }
-module.exports = {createServer, startServer, validateTarget};
+module.exports = {createServer, startServer, validateTarget, requestTimeout};

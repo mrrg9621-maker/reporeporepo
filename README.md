@@ -1,6 +1,6 @@
 # EULC Screener
 
-Revision: 2026-10-14 (Africa/Cairo). Version 2.2.0.
+Revision: 2026-10-14 (Africa/Cairo). Version 2.2.1.
 
 EULC Screener is an Electron desktop app for screening thesis libraries, searching transcripts, viewing matching pages, and exporting results. Its own local server starts and stops with the desktop app. No separate server or proxy needs to be started. The supplied localhost certificate/key are bundled in `resources/certs/`.
 
@@ -8,9 +8,9 @@ EULC Screener is an Electron desktop app for screening thesis libraries, searchi
 
 1. Extract the entire ZIP into a new, empty, writable folder so files from the older layout are not left alongside it. Do not run from inside the ZIP.
 2. Double-click **scripts/loader/Start EULC.cmd**.
-3. The CMD calls `scripts/loader/start-eulc.ps1`, which runs `npm install` automatically on each launch inside `app/`, including Electron. If Node.js is missing, install Node.js LTS from https://nodejs.org/ and run the launcher again. Internet is required to install missing packages and to search EULC.
+3. The CMD calls `scripts/loader/start-eulc.ps1`. On the first launch, and whenever `package-lock.json` changes, it runs `npm install` inside `app/`, including Electron; otherwise it skips installation. If Node.js is missing, install Node.js LTS from https://nodejs.org/ and run the launcher again. Internet is required to install missing packages and to search EULC.
 
-After installation, the loader checks the installed packages and desktop runtime before opening the app. If npm installation fails, it can use existing compatible packages; it repairs a missing Electron binary when possible. After the app closes, enter **R** to restart or press Enter to close the loader. It does not create shortcuts. Opening `app/ui/index.html` directly is not the app launch path: it cannot start the local server or desktop PDF features.
+The loader window is visible only while packages install or when something fails. On a normal launch it hides at once, starts the app and closes; no console stays open while the app runs. To restart, close the window and launch again. If npm installation fails, it can use existing compatible packages; it repairs a missing Electron binary when possible. The app's console output (request IDs, proxy errors) goes to `logs/eulc-<date>.log` and `logs/eulc-<date>-errors.log`; the last 10 launches are kept. On Windows 11 with Windows Terminal set as the default terminal, the loader window may stay visible for the second or two before it closes. It does not create shortcuts. Opening `app/ui/index.html` directly is not the app launch path: it cannot start the local server or desktop PDF features.
 
 The app listens only on loopback port 18761 and opens `https://localhost:18761`. Keep this port free. The fixed address also keeps the app's browser storage on a stable origin. A second launch focuses the existing window. Close the desktop window to stop the app and its local servers.
 
@@ -73,7 +73,7 @@ The ZIP contains the configuration found in the uploaded JSON, not saved results
 | --- | --- |
 | `scripts/loader/Start EULC.cmd` | Main launcher; calls the PowerShell loader |
 | `README.md` | Setup, usage and technical documentation |
-| `scripts/loader/start-eulc.ps1` | Automatic npm install, runtime checks, app launch and restart prompt |
+| `scripts/loader/start-eulc.ps1` | npm install when needed, runtime checks, hidden app launch with logs |
 | `app/package.json`, `app/package-lock.json` | App entry point and pinned dependencies |
 | `app/node_modules/` | Dependencies created by the loader; excluded from the ZIP |
 | `app/paths.cjs` | Central filesystem paths shared by desktop and server code |
@@ -90,7 +90,7 @@ The top level contains four folders (`app`, `scripts`, `resources`, `icons`) and
 
 ## Requests and dependencies
 
-The server serves only renderer assets, never its Node source or seed data. `/health` identifies the app. `/fetch?url=...` forwards GET, HEAD or POST requests exclusively to `eulc.edu.eg` and `www.eulc.edu.eg`. The desktop injects a separate Electron Chromium networking session for upstream EULC requests. This uses Chromium certificate-chain verification and system proxy handling instead of Node's built-in fetch implementation. The upstream session keeps normal certificate verification; the separate localhost certificate exception is limited to the UI session. The proxy passes form bodies and content types, handles validated redirects, returns upstream binary/text responses, and keeps session cookies in memory for the running app. Standalone server fixture tests can inject a fetch function and otherwise use Node fetch. Requests time out after 45 seconds. Host and Origin checks restrict use to this local app. Renderer searches are paced to eight simultaneous requests instead of launching an unbounded burst.
+The server serves only renderer assets, never its Node source or seed data. `/health` identifies the app. `/fetch?url=...` forwards GET, HEAD or POST requests exclusively to `eulc.edu.eg` and `www.eulc.edu.eg`. The desktop injects a separate Electron Chromium networking session for upstream EULC requests. This uses Chromium certificate-chain verification and system proxy handling instead of Node's built-in fetch implementation. The upstream session keeps normal certificate verification; the separate localhost certificate exception is limited to the UI session. The proxy passes form bodies and content types, handles validated redirects, returns upstream binary/text responses, and keeps session cookies in memory for the running app. Standalone server fixture tests can inject a fetch function and otherwise use Node fetch. Requests time out after 45 seconds by default; the renderer can raise this per request with `/fetch?timeout=<ms>&url=...`, up to 5 minutes. Library-builder catalogue searches use 3 minutes, run two at a time, and are retried once. Host and Origin checks restrict use to this local app. Renderer searches are paced to eight simultaneous requests instead of launching an unbounded burst.
 
 The desktop session trusts only the exact bundled localhost certificate; other certificates keep normal Chromium verification. No system certificate installation is required. The current certificate is valid through 1 February 2027; replace both certificate/key files together before expiry. Keep the private key private.
 
@@ -100,7 +100,7 @@ EULC searches still require access to EULC itself. Its page structure and availa
 
 ## Development and verification
 
-From the `app/` directory, run `npm ci`, then `npm start`. The desktop menu is visible. Open Developer Tools with **F12**, **Ctrl+Shift+I**, **View > Developer Tools**, or right-click > **Inspect element**. Ctrl+Shift+M toggles the menu. In Developer Tools, open Network before reproducing a failure and select the failed `/fetch` request. Response headers `X-EULC-Error-Source`, `X-EULC-Upstream-Status`, and `X-EULC-Request-Id` distinguish remote HTTP errors from errors generated by the local proxy. Response contains the upstream body or the local network/TLS cause. Console logs include the target URL, status, request ID and response body; `window.eulcLastRequestError` holds the latest HTTP failure. The loader console logs matching request IDs and status codes. A remote 501/503 is passed through; a local connection failure returns 502, and a timeout returns 504. From `app/`, run `npm test` for static asset, private-file, proxy form/binary/cookie, request restriction, redirect and network-failure checks. Tests use local fixtures and do not contact EULC.
+From the `app/` directory, run `npm ci`, then `npm start`. The desktop menu is visible. Open Developer Tools with **F12**, **Ctrl+Shift+I**, **View > Developer Tools**, or right-click > **Inspect element**. Ctrl+Shift+M toggles the menu. In Developer Tools, open Network before reproducing a failure and select the failed `/fetch` request. Response headers `X-EULC-Error-Source`, `X-EULC-Upstream-Status`, and `X-EULC-Request-Id` distinguish remote HTTP errors from errors generated by the local proxy. Response contains the upstream body or the local network/TLS cause. Console logs include the target URL, status, request ID and response body; `window.eulcLastRequestError` holds the latest HTTP failure. The files in `logs/` record matching request IDs and status codes. A remote 501/503 is passed through; a local connection failure returns 502, and a timeout returns 504. From `app/`, run `npm test` for static asset, private-file, proxy form/binary/cookie, request restriction, redirect and network-failure checks. Tests use local fixtures and do not contact EULC.
 
 The remake passed these server tests and a renderer initialization check. The supplied execution environment blocks Electron's graphical runtime; the Windows PowerShell loader, full desktop window/PDF behavior and live EULC searches require verification on the user's computer.
 
