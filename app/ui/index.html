@@ -98,7 +98,7 @@
           <div class="query-block">
             <div class="query-block-head"><span class="field-label" id="queryLabel">Search terms</span><button type="button" class="btn btn-ghost btn-sm" id="queryAddBtn"><svg class="ico"><use href="#i-plus"/></svg>Add term</button></div>
             <div id="querySpBoxes" class="query-list" aria-labelledby="queryLabel"></div>
-            <p class="field-note"><b>AND</b> terms must all be on the page. <b>OR</b> terms: the page needs at least one of them. Click the tick to switch a term between AND and OR.</p>
+            <p class="field-note"><b>AND</b> terms must all be on the page. <b>OR</b> terms: the page needs at least one of them. <b>NOT</b> terms exclude any page that has them.</p>
           </div>
           <div class="scope-grid">
             <div class="field"><span class="field-label">Source</span><div class="source-box" id="searchSource"></div></div>
@@ -112,7 +112,7 @@
           <div class="query-block">
             <div class="query-block-head"><span class="field-label" id="builderQueryLabel">Catalogue queries</span><button type="button" class="btn btn-ghost btn-sm" id="builderQueryAddBtn"><svg class="ico"><use href="#i-plus"/></svg>Add query</button></div>
             <div id="builderQueries" class="query-list" aria-labelledby="builderQueryLabel"></div>
-            <p class="field-note">Each query searches one catalogue field. <b>AND</b> queries must all match; of the <b>OR</b> queries at least one must match. <span id="builderPlanNote"></span> Inside a box: <b>*</b> for a partial word, <b>&amp;</b> for both words, <b>~</b> for nearby words.</p>
+            <p class="field-note">Each query searches one catalogue field. <b>AND</b> queries must all match; of the <b>OR</b> queries at least one must match; <b>NOT</b> queries exclude matching theses (EULC's "and not"). <span id="builderPlanNote"></span> Inside a box: <b>*</b> for a partial word, <b>&amp;</b> for both words, <b>~</b> for nearby words.</p>
           </div>
           <div class="scope-grid builder-grid">
             <div class="field"><label class="field-label" for="builderScopeSele">Location</label><select id="builderScopeSele"></select></div>

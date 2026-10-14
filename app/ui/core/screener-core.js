@@ -43,33 +43,67 @@ let searchSignal;
 /* A page/thesis matches when it satisfies every required query; with no
    required query it must satisfy at least one optional query. Optional
    queries never exclude anything once a required query exists. */
+/* Each query is AND, OR or NOT. Older parameters stored must (true = AND,
+   false = OR). */
+export function queryOp(query)
+{
+    if (query?.op === 'and' || query?.op === 'or' || query?.op === 'not') return query.op;
+    return query?.must === false ? 'or' : 'and';
+}
+
+/* A match needs every AND query, at least one OR query (when there are
+   any) and no NOT query. */
 export function matchesQueries(hits, queries)
 {
-    const anded = queries.filter(q => q.must);
-    const ored = queries.filter(q => !q.must);
-    return anded.every(q => hits.has(q)) && (!ored.length || ored.some(q => hits.has(q)));
+    const of = (op) => queries.filter(q => queryOp(q) === op);
+    const ors = of('or');
+    return of('and').every(q => hits.has(q)) && (!ors.length || ors.some(q => hits.has(q))) && !of('not').some(q => hits.has(q));
 }
 
 /* EULC's catalogue form takes 3 search boxes joined left to right by
    opr1/opr2 (and | or | and not); boxes 4+ are ignored. Up to 3 queries
-   fit one request: ORed queries first, then ANDed ones, which evaluates as
-   (o1 or o2) and a1. More queries are packed 3 per request, ANDed queries
-   together and ORed queries together, and the BibID sets are combined. */
+   fit one request: OR queries first, then AND, then NOT, which evaluates
+   as ((o1 or o2) and a1) and not n1. More queries are packed 3 per request
+   by kind, NOT queries riding in spare boxes where they can, and the BibID
+   sets are combined. */
 export const EULC_BOXES = 3;
 export function planCatalogueRequests(queries)
 {
-    const anded = queries.filter(q => q.must);
-    const ored = queries.filter(q => !q.must);
-    const chunk = (list) => Array.from({ length: Math.ceil(list.length / EULC_BOXES) }, (_, i) => list.slice(i * EULC_BOXES, (i + 1) * EULC_BOXES));
+    const of = (op) => queries.filter(q => queryOp(q) === op);
+    const [ands, ors, nots] = [of('and'), of('or'), of('not')];
+    // Same number of requests as filling boxes in order, but spread evenly
+    // (4 terms → 2 + 2) so NOT terms find spare boxes
+    const chunk = (list) => {
+        const count = Math.ceil(list.length / EULC_BOXES);
+        return Array.from({ length: count }, (_, i) => list.slice(Math.round(i * list.length / count), Math.round((i + 1) * list.length / count)));
+    };
+    const joiner = { and: 'and', or: 'or', not: 'and not' };
 
     if (queries.length <= EULC_BOXES) {
-        const slots = [...ored, ...anded];
-        const ops = slots.slice(1).map((_, i) => (i + 1 < ored.length ? 'or' : 'and'));
+        const slots = [...ors, ...ands, ...nots];
+        const ops = slots.slice(1).map(next => joiner[queryOp(next)]);
         return [{ role: 'all', slots, ops }];
     }
+    const andPlans = chunk(ands).map(slots => ({ role: 'and', slots, ops: slots.slice(1).map(() => 'and') }));
+    const orPlans = chunk(ors).map(slots => ({ role: 'or', slots, ops: slots.slice(1).map(() => 'or') }));
+
+    // A NOT term rides in a spare box as "and not": in one AND request (the
+    // final result is an intersection, so once is enough) or else in every OR
+    // request. Only NOT terms that fit nowhere get their own exclusion request.
+    const leftover = [];
+    for (const not of nots) {
+        const andPlan = andPlans.find(plan => plan.slots.length < EULC_BOXES);
+        if (andPlan) { andPlan.slots.push(not); andPlan.ops.push('and not'); continue; }
+        if (!andPlans.length && orPlans.length && orPlans.every(plan => plan.slots.length < EULC_BOXES)) {
+            for (const plan of orPlans) { plan.slots.push(not); plan.ops.push('and not'); }
+            continue;
+        }
+        leftover.push(not);
+    }
     return [
-        ...chunk(anded).map(slots => ({ role: 'and', slots, ops: slots.slice(1).map(() => 'and') })),
-        ...chunk(ored).map(slots => ({ role: 'or', slots, ops: slots.slice(1).map(() => 'or') }))
+        ...andPlans,
+        ...orPlans,
+        ...chunk(leftover).map(slots => ({ role: 'not', slots, ops: slots.slice(1).map(() => 'or') }))
     ];
 }
 
@@ -80,12 +114,17 @@ function combineCatalogueResults(results)
     if (all.length) return all[0].found;
 
     const order = new Map();
-    for (const { found } of results) for (const item of found) if (!order.has(item.bibID)) order.set(item.bibID, item);
+    for (const { plan, found } of results) {
+        if (plan.role === 'not') continue;
+        for (const item of found) if (!order.has(item.bibID)) order.set(item.bibID, item);
+    }
 
-    const andSets = results.filter(r => r.plan.role === 'and').map(r => new Set(r.found.map(i => i.bibID)));
-    const orSets = results.filter(r => r.plan.role === 'or').map(r => new Set(r.found.map(i => i.bibID)));
+    const sets = (role) => results.filter(r => r.plan.role === role).map(r => new Set(r.found.map(i => i.bibID)));
+    const [andSets, orSets, notSets] = [sets('and'), sets('or'), sets('not')];
     return [...order.values()].filter(({ bibID }) =>
-        andSets.every(set => set.has(bibID)) && (!orSets.length || orSets.some(set => set.has(bibID))));
+        andSets.every(set => set.has(bibID)) &&
+        (!orSets.length || orSets.some(set => set.has(bibID))) &&
+        !notSets.some(set => set.has(bibID)));
 }
 
 /* Library builder: one EULC catalogue request per query, BibID sets
@@ -192,7 +231,8 @@ export async function getLib({ queries, field = '0.', years, pages = {}, eulc = 
 
     const partsByPlan = await Promise.all(plans.map(plan => explore(plan, userYears, null)));
     const parts = partsByPlan.flat();
-    const total = parts.reduce((sum, part) => sum + (part.count ?? 0), 0);
+    // NOT parts are only an exclusion list: they need no details requests
+    const total = parts.filter(part => part.plan.role !== 'not').reduce((sum, part) => sum + (part.count ?? 0), 0);
 
     if (total > CATALOGUE_CONFIRM_ABOVE && !confirm(
         `EULC reports about ${total.toLocaleString()} matching theses for these queries.\n\n` +
@@ -377,7 +417,7 @@ async function getBib(bibID, queries, startYear, endYear, startPage, endPage) {
         for (const pageNumber of [...pagesHits.keys()].sort((a, b) => a - b)) {
             const hits = pagesHits.get(pageNumber);
             if (matchesQueries(hits, queries)) {
-                matchedSnippets.set(pageNumber, queries.filter(q => hits.has(q)).map(q => hits.get(q)));
+                matchedSnippets.set(pageNumber, queries.filter(q => queryOp(q) !== 'not' && hits.has(q)).map(q => hits.get(q)));
             }
         }
 

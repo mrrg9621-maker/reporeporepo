@@ -52,7 +52,7 @@ from '../utils/utils.js';
 import { screenerDB, cacheDB } from '../core/db.js';
 
 import {
-    getBibs, getLib, getPrevImgBlobObjs, planCatalogueRequests
+    getBibs, getLib, getPrevImgBlobObjs, planCatalogueRequests, queryOp
 }
 from '../core/screener-core.js';
 
@@ -658,8 +658,12 @@ function updateStopButtons()
 async function runThesisSearch()
 {
     let queries = searchQueries.values();
+    if (queries.length && queries.every(q => queryOp(q) === 'not')) {
+        notify('NOT only excludes. Add at least one AND or OR term.', 'warn');
+        return;
+    }
     if (!queries.length) {
-        queries = [{ text: QUERY_PLACEHOLDER, must: true }];
+        queries = [{ text: QUERY_PLACEHOLDER, op: 'and' }];
     }
 
     const bibID = isInteger(bibIDInput.value.trim()) ? bibIDInput.value.trim() : '';
@@ -706,9 +710,13 @@ async function runBuilderSearch()
     localStorage.setItem(PREV_BUILDER_PARAMS, JSON.stringify(params));
 
     let queries = params.queries;
+    if (queries.length && queries.every(q => queryOp(q) === 'not')) {
+        notify('NOT only excludes. Add at least one AND or OR term.', 'warn');
+        return;
+    }
     if (!queries.length) {
         // EULC needs some search text; the full-text box alone is enough when given
-        queries = [{ text: params.eulc.fullText ? '' : QUERY_PLACEHOLDER, must: true, field: EULC_DEFAULT_FIELD }];
+        queries = [{ text: params.eulc.fullText ? '' : QUERY_PLACEHOLDER, op: 'and', field: EULC_DEFAULT_FIELD }];
     }
 
     // Checked rows survive a new search while "Always show checked rows" is on
@@ -975,51 +983,61 @@ function processContentFilts(resultElements = screenerResGrp.querySelectorAll('.
  *               FORM COMPONENTS               *
  ***********************************************/
 
-/* A list of query rows: [AND/OR] [field] [text] [remove]. Ticked rows are
-   ANDed, unticked rows ORed (a match needs every AND row and, when there
-   are OR rows, at least one of them). A lone row is always ticked and
-   locked. Adding the second row unticks the first; added rows start OR. */
+/* A list of query rows: [AND|OR|NOT] [field] [text] [remove]. A match needs
+   every AND row, at least one OR row (when there are any) and no NOT row.
+   A lone row is always AND and locked. Adding the second row turns the
+   first into OR; added rows start as OR. */
+const QUERY_OPS = [
+    { op: 'and', label: 'AND', title: 'Must match' },
+    { op: 'or',  label: 'OR',  title: 'At least one of the OR terms must match' },
+    { op: 'not', label: 'NOT', title: 'Must not match: excludes anything that matches' }
+];
+
 function createQueryList(container, addButton, { placeholder, noun, withField = false, onChange })
 {
     container.addEventListener('input', () => onChange?.());
     container.classList.toggle('with-field', withField);
 
     const rows = () => [...container.querySelectorAll('.query-row')];
+    const getOp = (row) => row.dataset.op;
+    const setOp = (row, op) => {
+        row.dataset.op = op;
+        for (const btn of row.querySelectorAll('.query-ops button')) btn.setAttribute('aria-pressed', String(btn.dataset.op === op));
+    };
 
     function sync()
     {
         const all = rows();
         const single = all.length === 1;
         for (const row of all) {
-            const must = row.querySelector('.query-must input');
-            if (single) must.checked = true;
-            must.disabled = single;
-            row.querySelector('.query-op').textContent = must.checked ? 'AND' : 'OR';
-            row.querySelector('.query-must').title = single
-                ? `A single ${noun} always has to match`
-                : 'Ticked (AND): must match. Unticked (OR): at least one of the OR terms must match';
-            row.classList.toggle('is-required', must.checked);
+            if (single) setOp(row, 'and');
+            for (const btn of row.querySelectorAll('.query-ops button')) btn.disabled = single;
+            row.querySelector('.query-ops').title = single ? `A single ${noun} always has to match` : '';
             row.querySelector('.query-remove').hidden = single;
         }
         addButton.disabled = all.length >= MAX_QUERIES;
         onChange?.();
     }
 
-    function addRow({ text = '', must = false, field = EULC_DEFAULT_FIELD } = {})
+    function addRow({ text = '', op = 'or', field = EULC_DEFAULT_FIELD } = {})
     {
         const row = document.createElement('div');
         row.className = 'query-row';
 
-        const mustLabel = document.createElement('label');
-        mustLabel.className = 'query-must';
-        const mustBox = document.createElement('input');
-        mustBox.type = 'checkbox';
-        mustBox.checked = must;
-        mustBox.addEventListener('change', sync);
-        const mustText = document.createElement('span');
-        mustText.className = 'query-op';
-        mustLabel.append(mustBox, mustText);
-        row.append(mustLabel);
+        const ops = document.createElement('div');
+        ops.className = 'query-ops';
+        ops.setAttribute('role', 'group');
+        ops.setAttribute('aria-label', `How this ${noun} combines`);
+        for (const { op: value, label, title } of QUERY_OPS) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.dataset.op = value;
+            btn.textContent = label;
+            btn.title = title;
+            btn.addEventListener('click', () => { setOp(row, value); sync(); });
+            ops.append(btn);
+        }
+        row.append(ops);
 
         if (withField) {
             const fieldSele = document.createElement('select');
@@ -1052,6 +1070,7 @@ function createQueryList(container, addButton, { placeholder, noun, withField = 
         });
         row.append(remove);
 
+        setOp(row, op);
         container.append(row);
         return row;
     }
@@ -1059,7 +1078,7 @@ function createQueryList(container, addButton, { placeholder, noun, withField = 
     addButton.addEventListener('click', () => {
         const all = rows();
         if (all.length >= MAX_QUERIES) return;
-        if (all.length === 1) all[0].querySelector('.query-must input').checked = false;
+        if (all.length === 1) setOp(all[0], 'or');
         addRow().querySelector('.query-text').focus();
         sync();
     });
@@ -1068,7 +1087,7 @@ function createQueryList(container, addButton, { placeholder, noun, withField = 
     {
         container.replaceChildren();
         const entries = list.length ? list.slice(0, MAX_QUERIES) : [{}];
-        for (const entry of entries) addRow(entry);
+        for (const entry of entries) addRow({ ...entry, op: entry.text === undefined ? 'and' : queryOp(entry) });
         sync();
     }
 
@@ -1076,7 +1095,7 @@ function createQueryList(container, addButton, { placeholder, noun, withField = 
     {
         return rows().map(row => ({
             text: row.querySelector('.query-text').value.trim(),
-            must: row.querySelector('.query-must input').checked,
+            op: getOp(row),
             ...(withField ? { field: row.querySelector('.query-field').value } : {})
         })).filter(query => query.text);
     }
@@ -1202,9 +1221,9 @@ function readPrevParams(forMode)
 /* Old parameters kept all words in one comma-joined string, all required. */
 function legacyQueries(params)
 {
-    if (Array.isArray(params.queries)) return params.queries;
+    if (Array.isArray(params.queries)) return params.queries.map(q => ({ ...q, op: queryOp(q) }));
     const words = (params.query || '').split(', ').map(w => w.trim()).filter(w => w && w !== QUERY_PLACEHOLDER);
-    return words.map(text => ({ text, must: true }));
+    return words.map(text => ({ text, op: 'and' }));
 }
 
 function applySearchParams(params)
